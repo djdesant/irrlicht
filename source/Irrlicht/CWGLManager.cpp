@@ -38,7 +38,7 @@ bool CWGLManager::initialize(const SIrrlichtCreationParameters& params, const SE
 	Params=params;
 
 	// Create a window to test antialiasing support
-	const fschar_t* ClassName = __TEXT("CWGLManager");
+	const TCHAR* ClassName = __TEXT("CWGLManager");
 	HINSTANCE lhInstance = GetModuleHandle(0);
 
 	// Register Class
@@ -233,13 +233,13 @@ bool CWGLManager::initialize(const SIrrlichtCreationParameters& params, const SE
 			WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
 #ifdef WGL_ARB_multisample
 			WGL_SAMPLES_ARB,Params.AntiAlias, // 20,21
-			WGL_SAMPLE_BUFFERS_ARB, 1,
+			WGL_SAMPLE_BUFFERS_ARB, (Params.AntiAlias>0) ? 1 : 0,
 #elif defined(WGL_EXT_multisample)
 			WGL_SAMPLES_EXT,AntiAlias, // 20,21
-			WGL_SAMPLE_BUFFERS_EXT, 1,
+			WGL_SAMPLE_BUFFERS_EXT, (Params.AntiAlias>0) ? 1 : 0,
 #elif defined(WGL_3DFX_multisample)
 			WGL_SAMPLES_3DFX,AntiAlias, // 20,21
-			WGL_SAMPLE_BUFFERS_3DFX, 1,
+			WGL_SAMPLE_BUFFERS_3DFX, (Params.AntiAlias>0) ? 1 : 0,
 #endif
 #ifdef WGL_ARB_framebuffer_sRGB
 			WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, Params.HandleSRGB ? 1:0,
@@ -297,7 +297,8 @@ bool CWGLManager::initialize(const SIrrlichtCreationParameters& params, const SE
 	// now get new window
 	CurrentContext.OpenGLWin32.HWnd=videodata.OpenGLWin32.HWnd;
 	// get hdc
-	if (!(CurrentContext.OpenGLWin32.HDc=GetDC((HWND)videodata.OpenGLWin32.HWnd)))
+	CurrentContext.OpenGLWin32.HDc=GetDC((HWND)videodata.OpenGLWin32.HWnd);
+	if (!CurrentContext.OpenGLWin32.HDc)
 	{
 		os::Printer::log("Cannot create a GL device context.", ELL_ERROR);
 		return false;
@@ -463,7 +464,7 @@ bool CWGLManager::activateContext(const SExposedVideoData& videoData, bool resto
 	{
 		if (!wglMakeCurrent((HDC)PrimaryContext.OpenGLWin32.HDc, (HGLRC)PrimaryContext.OpenGLWin32.HRc))
 		{
-			os::Printer::log("Render Context switch failed.");
+			os::Printer::log("Render Context switch (back to main) failed.");
 			return false;
 		}
 		CurrentContext=PrimaryContext;

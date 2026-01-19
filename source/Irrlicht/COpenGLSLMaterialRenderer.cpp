@@ -14,7 +14,6 @@
 
 #ifdef _IRR_COMPILE_WITH_OPENGL_
 
-#include "IGPUProgrammingServices.h"
 #include "IShaderConstantSetCallBack.h"
 #include "IMaterialRendererServices.h"
 #include "IVideoDriver.h"
@@ -22,7 +21,6 @@
 
 #include "COpenGLDriver.h"
 #include "COpenGLCacheHandler.h"
-#include "COpenGLMaterialRenderer.h"
 
 #include "COpenGLCoreFeature.h"
 
@@ -35,14 +33,8 @@ namespace video
 //! Constructor
 COpenGLSLMaterialRenderer::COpenGLSLMaterialRenderer(video::COpenGLDriver* driver,
 		s32& outMaterialTypeNr, const c8* vertexShaderProgram,
-		const c8* vertexShaderEntryPointName,
-		E_VERTEX_SHADER_TYPE vsCompileTarget,
 		const c8* pixelShaderProgram,
-		const c8* pixelShaderEntryPointName,
-		E_PIXEL_SHADER_TYPE psCompileTarget,
 		const c8* geometryShaderProgram,
-		const c8* geometryShaderEntryPointName,
-		E_GEOMETRY_SHADER_TYPE gsCompileTarget,
 		scene::E_PRIMITIVE_TYPE inType, scene::E_PRIMITIVE_TYPE outType,
 		u32 verticesOut,
 		IShaderConstantSetCallBack* callback,
@@ -83,7 +75,7 @@ COpenGLSLMaterialRenderer::COpenGLSLMaterialRenderer(video::COpenGLDriver* drive
 	if (!Driver->queryFeature(EVDF_ARB_GLSL))
 		return;
 
-	init(outMaterialTypeNr, vertexShaderProgram, pixelShaderProgram, geometryShaderProgram);
+	init(outMaterialTypeNr, vertexShaderProgram, pixelShaderProgram, geometryShaderProgram, inType, outType, verticesOut);
 }
 
 
@@ -206,6 +198,8 @@ void COpenGLSLMaterialRenderer::init(s32& outMaterialTypeNr,
 	}
 #endif
 
+	Driver->testGLError(__LINE__);	// Note: Often will be the outType, as EPT_TRIANGLE_STRIP instead of EPT_TRIANGLES is required there
+
 	if (!linkProgram())
 		return;
 
@@ -230,14 +224,14 @@ void COpenGLSLMaterialRenderer::OnSetMaterial(const video::SMaterial& material,
 				bool resetAllRenderstates,
 				video::IMaterialRendererServices* services)
 {
-	if (Driver->getFixedPipelineState() == COpenGLDriver::EOFPS_ENABLE)
-		Driver->setFixedPipelineState(COpenGLDriver::EOFPS_ENABLE_TO_DISABLE);
+	if (Driver->getActivePipelineState() == COpenGLDriver::EOAP_FIXED)
+		Driver->setActivePipelineState(COpenGLDriver::EOAP_FIXED_TO_SHADER);
 	else
-		Driver->setFixedPipelineState(COpenGLDriver::EOFPS_DISABLE);
+		Driver->setActivePipelineState(COpenGLDriver::EOAP_SHADER);
 
 	COpenGLCacheHandler* cacheHandler = Driver->getCacheHandler();
 
-	if (material.MaterialType != lastMaterial.MaterialType || resetAllRenderstates)
+	if (material.MaterialType != lastMaterial.MaterialType || resetAllRenderstates)	// each program has it's own type
 	{
 		if (Program2)
 			Driver->irrGlUseProgram(Program2);
@@ -563,13 +557,25 @@ bool COpenGLSLMaterialRenderer::linkProgram()
 	return true;
 }
 
-
-void COpenGLSLMaterialRenderer::setBasicRenderStates(const SMaterial& material,
-						const SMaterial& lastMaterial,
-						bool resetAllRenderstates)
+void COpenGLSLMaterialRenderer::startUseProgram()
 {
-	// forward
-	Driver->setBasicRenderStates(material, lastMaterial, resetAllRenderstates);
+	if (Program2)
+		Driver->irrGlUseProgram(Program2);
+	else if (Program)
+		Driver->extGlUseProgramObject(Program);
+}
+
+void COpenGLSLMaterialRenderer::stopUseProgram()
+{
+	// Necessary as fixed function pipeline breaks if programs are not reset to 0
+	if (Program)
+		Driver->extGlUseProgramObject(0);
+	if (Program2)
+		Driver->irrGlUseProgram(0);
+
+	// Force reset of material to ensure OnSetMaterial will be called or we can miss 
+	// the next UseProgram call as stopUseProgram can be called from anywhere
+	Driver->DoResetRenderStates();
 }
 
 s32 COpenGLSLMaterialRenderer::getVertexShaderConstantID(const c8* name)
@@ -608,9 +614,13 @@ bool COpenGLSLMaterialRenderer::setVertexShaderConstant(s32 index, const s32* in
 	return setPixelShaderConstant(index, ints, count);
 }
 
+bool COpenGLSLMaterialRenderer::setVertexShaderConstant(s32 index, const u32* ints, int count)
+{
+	return setPixelShaderConstant(index, ints, count);
+}
+
 bool COpenGLSLMaterialRenderer::setPixelShaderConstant(s32 index, const f32* floats, int count)
 {
-#ifdef GL_ARB_shader_objects
 	if(index < 0 || UniformInfo[index].location < 0)
 		return false;
 
@@ -633,8 +643,26 @@ bool COpenGLSLMaterialRenderer::setPixelShaderConstant(s32 index, const f32* flo
 		case GL_FLOAT_MAT2:
 			Driver->extGlUniformMatrix2fv(UniformInfo[index].location, count/4, false, floats);
 			break;
+		case GL_FLOAT_MAT2x3:
+			Driver->extGlUniformMatrix2x3fv(UniformInfo[index].location, count/6, false, floats);
+			break;
+		case GL_FLOAT_MAT2x4:
+			Driver->extGlUniformMatrix2x4fv(UniformInfo[index].location, count/8, false, floats);
+			break;
+		case GL_FLOAT_MAT3x2:
+			Driver->extGlUniformMatrix3x2fv(UniformInfo[index].location, count/6, false, floats);
+			break;
 		case GL_FLOAT_MAT3:
 			Driver->extGlUniformMatrix3fv(UniformInfo[index].location, count/9, false, floats);
+			break;
+		case GL_FLOAT_MAT3x4:
+			Driver->extGlUniformMatrix3x4fv(UniformInfo[index].location, count/12, false, floats);
+			break;
+		case GL_FLOAT_MAT4x2:
+			Driver->extGlUniformMatrix4x2fv(UniformInfo[index].location, count/8, false, floats);
+			break;
+		case GL_FLOAT_MAT4x3:
+			Driver->extGlUniformMatrix4x3fv(UniformInfo[index].location, count/12, false, floats);
 			break;
 		case GL_FLOAT_MAT4:
 			Driver->extGlUniformMatrix4fv(UniformInfo[index].location, count/16, false, floats);
@@ -648,7 +676,7 @@ bool COpenGLSLMaterialRenderer::setPixelShaderConstant(s32 index, const f32* flo
 			{
 				if(floats)
 				{
-					const GLint id = static_cast<const GLint>(*floats);
+					const GLint id = static_cast<GLint>(*floats);
 					Driver->extGlUniform1iv(UniformInfo[index].location, 1, &id);
 				}
 				else
@@ -660,14 +688,10 @@ bool COpenGLSLMaterialRenderer::setPixelShaderConstant(s32 index, const f32* flo
 			break;
 	}
 	return status;
-#else
-	return false;
-#endif
 }
 
 bool COpenGLSLMaterialRenderer::setPixelShaderConstant(s32 index, const s32* ints, int count)
 {
-#ifdef GL_ARB_shader_objects
 	if(index < 0 || UniformInfo[index].location < 0)
 		return false;
 
@@ -704,9 +728,36 @@ bool COpenGLSLMaterialRenderer::setPixelShaderConstant(s32 index, const s32* int
 			break;
 	}
 	return status;
-#else
-	return false;
+}
+
+bool COpenGLSLMaterialRenderer::setPixelShaderConstant(s32 index, const u32* ints, int count)
+{
+	if(index < 0 || UniformInfo[index].location < 0)
+		return false;
+
+	bool status = true;
+
+	switch (UniformInfo[index].type)
+	{
+		case GL_UNSIGNED_INT:
+			Driver->extGlUniform1uiv(UniformInfo[index].location, count, reinterpret_cast<const GLuint*>(ints));
+			break;
+#if defined(GL_VERSION_3_0)
+		case GL_UNSIGNED_INT_VEC2:
+			Driver->extGlUniform2uiv(UniformInfo[index].location, count/2, reinterpret_cast<const GLuint*>(ints));
+			break;
+		case GL_UNSIGNED_INT_VEC3:
+			Driver->extGlUniform3uiv(UniformInfo[index].location, count/3, reinterpret_cast<const GLuint*>(ints));
+			break;
+		case GL_UNSIGNED_INT_VEC4:
+			Driver->extGlUniform4uiv(UniformInfo[index].location, count/4, reinterpret_cast<const GLuint*>(ints));
+			break;
 #endif
+		default:
+			status = false;
+			break;
+	}
+	return status;
 }
 
 IVideoDriver* COpenGLSLMaterialRenderer::getVideoDriver()

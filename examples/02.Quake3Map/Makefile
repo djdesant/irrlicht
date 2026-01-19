@@ -12,7 +12,7 @@ IrrlichtHome := ../..
 BinPath = ../../bin/$(SYSTEM)
 
 # general compiler settings (might need to be set when compiling the lib, too)
-CPPFLAGS += -I$(IrrlichtHome)/include -I/usr/X11R6/include
+CPPFLAGS += -I$(IrrlichtHome)/include
 ifndef NDEBUG
 CXXFLAGS += -g -Wall
 else
@@ -25,6 +25,7 @@ all: all_linux
 # target specific settings
 all_linux all_win32 static_win32: LDFLAGS += -L$(IrrlichtHome)/lib/$(SYSTEM) -lIrrlicht
 all_linux: LDFLAGS += -L/usr/X11R6/lib$(LIBSELECT) -lGL -lXxf86vm -lXext -lX11 -lXcursor
+#all_linux: LDFLAGS += `sdl-config --libs`
 all_linux clean_linux: SYSTEM=Linux
 all_win32 clean_win32 static_win32: SYSTEM=Win32-gcc
 all_win32 clean_win32 static_win32: SUF=.exe

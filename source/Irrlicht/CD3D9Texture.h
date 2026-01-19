@@ -2,8 +2,8 @@
 // This file is part of the "Irrlicht Engine".
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
-#ifndef __C_DIRECTX9_TEXTURE_H_INCLUDED__
-#define __C_DIRECTX9_TEXTURE_H_INCLUDED__
+#ifndef IRR_C_DIRECTX9_TEXTURE_H_INCLUDED
+#define IRR_C_DIRECTX9_TEXTURE_H_INCLUDED
 
 #include "IrrCompileConfig.h"
 #ifdef _IRR_COMPILE_WITH_DIRECT3D_9_
@@ -32,15 +32,20 @@ public:
 
 	virtual ~CD3D9Texture();
 
-	virtual void* lock(E_TEXTURE_LOCK_MODE mode = ETLM_READ_WRITE, u32 mipmapLevel=0, u32 layer = 0, E_TEXTURE_LOCK_FLAGS lockFlags = ETLF_FLIP_Y_UP_RTT) _IRR_OVERRIDE_;
+	virtual void* lock(E_TEXTURE_LOCK_MODE mode = ETLM_READ_WRITE, u32 mipmapLevel=0, u32 layer = 0, E_TEXTURE_LOCK_FLAGS lockFlags = ETLF_FLIP_Y_UP_RTT) IRR_OVERRIDE;
 
-	virtual void unlock() _IRR_OVERRIDE_;
+	virtual void unlock() IRR_OVERRIDE;
 
-	virtual void regenerateMipMapLevels(void* data = 0, u32 layer = 0) _IRR_OVERRIDE_;
+	virtual void regenerateMipMapLevels(void* data = 0, u32 layer = 0) IRR_OVERRIDE;
 
 	IDirect3DBaseTexture9* getDX9BaseTexture() const;
 	IDirect3DTexture9* getDX9Texture() const;
 	IDirect3DCubeTexture9* getDX9CubeTexture() const;
+
+	inline bool HasVertexTextureSupport() const 
+	{
+		return VertexTextureSupport;
+	}
 
 private:
 	friend class CD3D9Driver;
@@ -53,7 +58,19 @@ private:
 
 	void getImageValues(const IImage* image);
 
-	void uploadTexture(u32 layer, u32 level, void* data);
+	void uploadTexture(void* data, u32 mipmapLevel, u32 layer);
+
+	//! Helper function for mipmap generation.
+	bool createManualMipMaps(u32 level);
+
+	//! Helper function for mipmap generation.
+	void copy16BitMipMap(char* src, char* tgt,
+		s32 width, s32 height,  s32 pitchsrc, s32 pitchtgt) const;
+
+	//! Helper function for mipmap generation.
+	void copy32BitMipMap(char* src, char* tgt,
+		s32 width, s32 height,  s32 pitchsrc, s32 pitchtgt) const;
+
 
 	CD3D9Driver* Driver;
 
@@ -62,8 +79,10 @@ private:
 	bool LockReadOnly;
 	void* LockData;
 	u32 LockLayer;
+	u32 MipLevelLocked;
 
-	bool AutoGenerateMipMaps;
+	bool HardwareMipMaps;
+	bool VertexTextureSupport;
 
 	IDirect3DDevice9* Device;
 	IDirect3DTexture9* Texture;

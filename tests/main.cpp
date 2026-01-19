@@ -49,8 +49,9 @@ int main(int argumentCount, char * arguments[])
 #if 0
 	// To interactively debug a test, move it (temporarily) in here and enable the define to only run this test
 	// Otherwise debugging is slightly tricky as each test runs in it's own process.
-	TEST(textureFeatures);
+		TEST(matrixOps);
 #else
+
 	TEST(disambiguateTextures); // Normally you should run this first, since it validates the working directory.
 	// Now the simple tests without device
 	TEST(testIrrArray);
@@ -122,9 +123,8 @@ int main(int argumentCount, char * arguments[])
 	TEST(mrt);
 	TEST(projectionMatrix);
 	// large scenes/long rendering
-	// shadows are slow
-//	TEST(orthoCam);
-//	TEST(stencilShadow);
+	TEST(orthoCam);
+	TEST(stencilShadow);
 	// q3 maps are slow
 	TEST(planeMatrix);
 	TEST(terrainSceneNode);
@@ -246,7 +246,10 @@ int main(int argumentCount, char * arguments[])
 #ifdef _IRR_WINDOWS_
 		(void)system("tests.log");
 #else
-		(void)system("$PAGER tests.log");
+		if ( getenv("PAGER") )
+			(void)system("$PAGER tests.log");
+		else
+			printf("See tests.log for results. Or set $PAGER environment variable to show it directly.\n");
 #endif
 		return fails;
 	}

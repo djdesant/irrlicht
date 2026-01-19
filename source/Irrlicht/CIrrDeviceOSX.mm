@@ -559,9 +559,10 @@ namespace irr
 //! constructor
 CIrrDeviceMacOSX::CIrrDeviceMacOSX(const SIrrlichtCreationParameters& param)
 	: CIrrDeviceStub(param), Window(NULL), Display(NULL),
-	SoftwareDriverTarget(0), DeviceWidth(0), DeviceHeight(0),
-	ScreenWidth(0), ScreenHeight(0), MouseButtonStates(0), SoftwareRendererType(0),
-	IsActive(true), IsFullscreen(false), IsShiftDown(false), IsControlDown(false), IsResizable(false)
+	DeviceWidth(0), DeviceHeight(0),
+	ScreenWidth(0), ScreenHeight(0), MouseButtonStates(0),
+	IsActive(true), IsFullscreen(false), IsShiftDown(false), IsControlDown(false), IsResizable(false),
+	SoftwareDriverTarget(nil),SoftwareRendererType(0)
 {
 	struct utsname name;
 	NSString *path;
@@ -578,7 +579,7 @@ CIrrDeviceMacOSX::CIrrDeviceMacOSX(const SIrrlichtCreationParameters& param)
 		{
 			[[NSAutoreleasePool alloc] init];
 			[[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
-			[NSApp setDelegate:(id<NSApplicationDelegate>)[[[CIrrDelegateOSX alloc] initWithDevice:this] autorelease]];
+			[[NSApplication sharedApplication] setDelegate:[[[CIrrDelegateOSX alloc] initWithDevice:this] autorelease]];
             
             // Create menu
             
@@ -628,7 +629,6 @@ CIrrDeviceMacOSX::CIrrDeviceMacOSX(const SIrrlichtCreationParameters& param)
 
 CIrrDeviceMacOSX::~CIrrDeviceMacOSX()
 {
-	[SoftwareDriverTarget release];
 #ifdef __MAC_10_6
 	[NSApp setPresentationOptions:(NSApplicationPresentationDefault)];
 #else
@@ -646,6 +646,12 @@ CIrrDeviceMacOSX::~CIrrDeviceMacOSX()
 
 void CIrrDeviceMacOSX::closeDevice()
 {
+	if ( SoftwareDriverTarget != nil )
+	{
+		[SoftwareDriverTarget release];
+		SoftwareDriverTarget = nil;
+	}
+	
 	if (Window != nil)
 	{
 		[Window setIsVisible:FALSE];
@@ -677,8 +683,13 @@ bool CIrrDeviceMacOSX::createWindow()
     ScreenWidth = (int)CGDisplayPixelsWide(Display);
     ScreenHeight = (int)CGDisplayPixelsHigh(Display);
     
-    const NSBackingStoreType type = (CreationParams.DriverType == video::EDT_OPENGL) ? NSBackingStoreBuffered : NSBackingStoreNonretained;
-    
+	//NSBackingStoreNonretained not working since El Capitan (TA has)
+#ifdef __MAC_10_6	
+    const NSBackingStoreType backing_type = NSBackingStoreBuffered;
+#else
+	const NSBackingStoreType backing_type = (CreationParams.DriverType == video::EDT_OPENGL) ? NSBackingStoreBuffered : NSBackingStoreNonretained;
+#endif
+
     if (!CreationParams.Fullscreen)
     {
         if (!CreationParams.WindowId) //create another window when WindowId is null
@@ -692,7 +703,10 @@ bool CIrrDeviceMacOSX::createWindow()
                 y = screenHeight - y - CreationParams.WindowSize.Height;
             }
             
-            Window = [[NSWindow alloc] initWithContentRect:NSMakeRect(x, y, CreationParams.WindowSize.Width,CreationParams.WindowSize.Height) styleMask:NSTitledWindowMask+NSClosableWindowMask+NSResizableWindowMask backing:type defer:FALSE];
+            Window = [[NSWindow alloc] initWithContentRect:NSMakeRect(x, y, CreationParams.WindowSize.Width,CreationParams.WindowSize.Height)
+			styleMask:NSTitledWindowMask+NSClosableWindowMask+NSResizableWindowMask
+			backing:backing_type
+			defer:NO];
 
             if (CreationParams.WindowPosition.X == -1 && CreationParams.WindowPosition.Y == -1)
                 [Window center];
@@ -757,7 +771,7 @@ bool CIrrDeviceMacOSX::createWindow()
                 
                 if (error == CGDisplayNoErr)
                 {
-                    Window = [[NSWindow alloc] initWithContentRect:[[NSScreen mainScreen] frame] styleMask:NSBorderlessWindowMask backing:type defer:FALSE screen:[NSScreen mainScreen]];
+                    Window = [[NSWindow alloc] initWithContentRect:[[NSScreen mainScreen] frame] styleMask:NSBorderlessWindowMask backing:backing_type defer:FALSE screen:[NSScreen mainScreen]];
                     
                     [Window setLevel: CGShieldingWindowLevel()];
                     [Window setBackgroundColor:[NSColor blackColor]];
@@ -780,7 +794,7 @@ bool CIrrDeviceMacOSX::createWindow()
     {
         if (Window)
         {
-            [Window setDelegate:(id<NSWindowDelegate>)[NSApp delegate]];
+            [Window setDelegate:(CIrrDelegateOSX *)[NSApp delegate]];
             [Window setAcceptsMouseMovedEvents:TRUE];
             [Window setIsVisible:TRUE];
             [Window makeKeyAndOrderFront:nil];
@@ -821,6 +835,22 @@ void CIrrDeviceMacOSX::setResize(int width, int height)
 	{
 		NSRect driverFrame = [Window contentRectForFrameRect:[Window frame]];
 		getVideoDriver()->OnResize(core::dimension2d<u32>( (s32)driverFrame.size.width, (s32)driverFrame.size.height));
+		DeviceWidth = (s32)driverFrame.size.width;
+		DeviceHeight = (s32)driverFrame.size.height;
+
+		//SceneManager ( Camera ) should react with reset, otherwise sticky mouse
+		irr::SEvent	ievent;
+		ievent.EventType = irr::EET_MOUSE_INPUT_EVENT;
+		MouseButtonStates &= ~irr::EMBSM_LEFT;
+		ievent.MouseInput.ButtonStates = MouseButtonStates;
+		ievent.MouseInput.Event = irr::EMIE_LMOUSE_LEFT_UP;
+		ievent.MouseInput.Control = false;
+		ievent.MouseInput.Shift = false;
+		
+		const core::position2di& curr = ((CCursorControl *)CursorControl)->getPosition(false);
+		ievent.MouseInput.X = curr.X;
+		ievent.MouseInput.Y = curr.Y;
+		postEventFromUser(ievent);
 	}
 	else
 		getVideoDriver()->OnResize(core::dimension2d<u32>( (s32)width, (s32)height));
@@ -835,6 +865,10 @@ void CIrrDeviceMacOSX::createDriver()
 #ifdef _IRR_COMPILE_WITH_SOFTWARE_
 			VideoDriver = video::createSoftwareDriver(CreationParams.WindowSize, CreationParams.Fullscreen, FileSystem, this);
 			SoftwareRendererType = 2;
+			if (Window)
+			{
+				[[Window contentView] setWantsLayer:YES];
+			}
 #else
 			os::Printer::log("No Software driver support compiled in.", ELL_ERROR);
 #endif
@@ -844,6 +878,12 @@ void CIrrDeviceMacOSX::createDriver()
 #ifdef _IRR_COMPILE_WITH_BURNINGSVIDEO_
 			VideoDriver = video::createBurningVideoDriver(CreationParams, FileSystem, this);
 			SoftwareRendererType = 1;
+			if (Window)
+			{
+				[[Window contentView] setWantsLayer:YES];
+				[ Window setOpaque:YES];
+			}
+			
 #else
 			os::Printer::log("Burning's video driver was not compiled in.", ELL_ERROR);
 #endif
@@ -862,10 +902,16 @@ void CIrrDeviceMacOSX::createDriver()
                     os::Printer::log("Could not create OpenGL driver.", ELL_ERROR);
                 }
                 
-                if (Window)
-                    [(NSOpenGLContext*)ContextManager->getContext().OpenGLOSX.Context setView:[Window contentView]];
-                else
-                    [(NSOpenGLContext*)ContextManager->getContext().OpenGLOSX.Context setView:(NSView*)CreationParams.WindowId];
+				if (Window) 
+				{
+					[[Window contentView] setWantsBestResolutionOpenGLSurface:NO];
+					[(NSOpenGLContext*)ContextManager->getContext().OpenGLOSX.Context setView:[Window contentView]];
+				}
+				else 
+				{
+					[(NSView*)CreationParams.WindowId setWantsBestResolutionOpenGLSurface:NO];
+					[(NSOpenGLContext*)ContextManager->getContext().OpenGLOSX.Context setView:(NSView*)CreationParams.WindowId];
+				}
 
 #ifndef __MAC_10_6
                 CGLContextObj CGLContext = (CGLContextObj)[(NSOpenGLContext*)ContextManager->getContext().OpenGLOSX.Context CGLContextObj];
@@ -957,7 +1003,7 @@ bool CIrrDeviceMacOSX::run()
 
 			case NSLeftMouseUp:
 				ievent.EventType = irr::EET_MOUSE_INPUT_EVENT;
-				MouseButtonStates &= !irr::EMBSM_LEFT;
+				MouseButtonStates &= ~irr::EMBSM_LEFT;
 				ievent.MouseInput.ButtonStates = MouseButtonStates;
 				ievent.MouseInput.Event = irr::EMIE_LMOUSE_LEFT_UP;
 				postMouseEvent(event,ievent);
@@ -973,7 +1019,7 @@ bool CIrrDeviceMacOSX::run()
 
 			case NSOtherMouseUp:
 				ievent.EventType = irr::EET_MOUSE_INPUT_EVENT;
-				MouseButtonStates &= !irr::EMBSM_MIDDLE;
+				MouseButtonStates &= ~irr::EMBSM_MIDDLE;
 				ievent.MouseInput.ButtonStates = MouseButtonStates;
 				ievent.MouseInput.Event = irr::EMIE_MMOUSE_LEFT_UP;
 				postMouseEvent(event,ievent);
@@ -1000,7 +1046,7 @@ bool CIrrDeviceMacOSX::run()
 			case NSRightMouseUp:
 				ievent.EventType = irr::EET_MOUSE_INPUT_EVENT;
 				ievent.MouseInput.Event = irr::EMIE_RMOUSE_LEFT_UP;
-				MouseButtonStates &= !irr::EMBSM_RIGHT;
+				MouseButtonStates &= ~irr::EMBSM_RIGHT;
 				ievent.MouseInput.ButtonStates = MouseButtonStates;
 				postMouseEvent(event,ievent);
 				break;
@@ -1059,20 +1105,28 @@ void CIrrDeviceMacOSX::sleep(u32 timeMs, bool pauseTimer=false)
 
 void CIrrDeviceMacOSX::setWindowCaption(const wchar_t* text)
 {
-	size_t size;
-	char title[1024];
-
 	if (Window != NULL)
 	{
-		size = wcstombs(title,text,1024);
-		title[1023] = 0;
-#ifdef __MAC_10_6
-		NSString* name = [NSString stringWithCString:title encoding:NSUTF8StringEncoding];
+		if ( text )
+		{
+			size_t numBytes = wcslen(text) * sizeof(wchar_t);
+
+#ifdef __BIG_ENDIAN__
+			NSStringEncoding encode = sizeof(wchar_t) == 4 ? NSUTF32BigEndianStringEncoding : NSUTF16BigEndianStringEncoding;
 #else
-		NSString* name = [NSString stringWithCString:title length:size];
+			NSStringEncoding encode = sizeof(wchar_t) == 4 ? NSUTF32LittleEndianStringEncoding : NSUTF16LittleEndianStringEncoding;
 #endif
-		[Window setTitle:name];
-		[name release];
+			NSString* name = [[NSString alloc] initWithBytes:text length:numBytes encoding:encode];
+			if ( name )
+			{
+				[Window setTitle:name];
+				[name release];
+			}
+		}
+		else
+		{
+			[Window setTitle:@""];
+		}
 	}
 }
 
@@ -1190,7 +1244,12 @@ void CIrrDeviceMacOSX::postMouseEvent(void *event,irr::SEvent &ievent)
 	}
 
 	if (post)
+	{
+		ievent.MouseInput.Shift = ([(NSEvent *)event modifierFlags] & NSShiftKeyMask) != 0;
+		ievent.MouseInput.Control = ([(NSEvent *)event modifierFlags] & NSControlKeyMask) != 0;
+		
 		postEventFromUser(ievent);
+	}
 
 	[NSApp sendEvent:(NSEvent *)event];
 }
@@ -1217,7 +1276,7 @@ void CIrrDeviceMacOSX::storeMouseLocation()
 		x = (int)point.x;
 		y = (int)point.y;
 
-		const core::position2di& curr = ((CCursorControl *)CursorControl)->getPosition();
+		const core::position2di& curr = ((CCursorControl *)CursorControl)->getPosition(true);
 		if (curr.X != x || curr.Y != y)
 		{
 			// In fullscreen mode, events are not sent regularly so rely on polling
@@ -1257,7 +1316,7 @@ void CIrrDeviceMacOSX::setMouseLocation(int x,int y)
 	c.y = p.y;
 
 #ifdef __MAC_10_6
-    CGEventRef ev = CGEventCreateMouseEvent(0, kCGEventMouseMoved, c, 0);
+    CGEventRef ev = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, c, static_cast<CGMouseButton>(kCGEventMouseMoved));
     CGEventPost(kCGHIDEventTap, ev);
     CFRelease(ev);
 #else
@@ -1451,6 +1510,106 @@ core::position2di CIrrDeviceMacOSX::getWindowPosition()
 
 bool CIrrDeviceMacOSX::present(video::IImage* surface, void* windowId, core::rect<s32>* src )
 {
+	if (SoftwareRendererType > 0 && surface)
+	{
+		int src_width = surface->getDimension().Width;
+		int src_height = surface->getDimension().Height;
+		const u32 src_pitch = surface->getPitch();
+
+		const u8* src = (u8*)surface->getData();
+		const video::ECOLOR_FORMAT src_format = surface->getColorFormat();
+		
+		//little endian likely not in memory ARGB
+		//ECOLOR_FORMAT dstFormat = ECF_B8G8R8A8;
+		const u32 dst_colorsamples = SoftwareRendererType == 2 ? 3 : 3;
+		const u32 dst_pitch = src_width * dst_colorsamples;
+		
+		@autoreleasepool {
+        NSBitmapImageRep *rep = [[
+			[NSBitmapImageRep alloc] initWithBitmapDataPlanes: nil
+			pixelsWide: src_width
+			pixelsHigh: src_height
+			bitsPerSample: 8
+			samplesPerPixel: dst_colorsamples
+			hasAlpha: dst_colorsamples == 4 ? YES : NO
+			isPlanar: NO
+			colorSpaceName: NSDeviceRGBColorSpace
+			bitmapFormat: NSAlphaNonpremultipliedBitmapFormat
+			bytesPerRow: dst_pitch
+			bitsPerPixel: 8 * dst_colorsamples] autorelease
+								  ];
+		
+        if ( rep == nil) return false;
+        // convert to BGR
+		u8* dst = (u8*) [rep bitmapData];
+		if ( 0 == dst ) return false;
+
+	
+		int blitter = 0;
+		if ( src_format == video::ECF_A8R8G8B8 && dst_colorsamples == 3 ) blitter = 1;
+		else if ( src_format == video::ECF_A8R8G8B8 && dst_colorsamples == 4 ) blitter = 2;
+		else if ( src_format == video::ECF_A1R5G5B5 && dst_colorsamples == 3 ) blitter = 3;
+
+		for (s32 y=0; y < src_height; ++y)
+		{
+			switch(blitter)
+			{
+				// video::CColorConverter::convert_A8R8G8B8toB8G8R8(srcdata, minWidth, destData); // broken ?
+				case 1:
+				{
+					const u8* sB = src;
+					u8* dB = dst;
+					
+					for (s32 x = 0; x < src_width; ++x)
+					{
+						dB[0] = sB[2];
+						dB[1] = sB[1];
+						dB[2] = sB[0];
+						//dB[3] = sB[3];
+
+						sB += 4;
+						dB += 3;
+					}
+				} break;
+				
+				case 2:
+				{
+					const u32* sB = (const u32*)src;
+					u32 * dB = (u32*)dst;
+					
+					for (s32 x = 0; x < src_width; ++x)
+					{
+						size_t v = *sB++;
+						*dB++ = 
+							(( v & 0x00ff0000 ) >> 16 ) |
+							(( v & 0x0000ff00 )       ) |
+							(( v & 0x000000ff ) << 16 ) |
+							0xff000000;
+					}
+				} break;
+				
+				case 3: video::CColorConverter::convert_A1R5G5B5toB8G8R8(src, src_width, dst); break;
+				default: video::CColorConverter::convert_viaFormat(src, src_format, src_width, dst, video::ECF_R8G8B8); break;
+			}
+			src += src_pitch;
+			dst += dst_pitch;
+		}
+
+		// add layer
+        NSSize imageSize = NSMakeSize(src_width, src_height);
+        NSImage *image = [[[NSImage alloc] initWithSize: imageSize] autorelease];
+		
+        [image addRepresentation: rep];
+        [[[Window contentView] layer] setContents:image];
+		}
+		return true;		
+	}
+	return false;
+}
+
+#if 0
+bool CIrrDeviceMacOSX::present_v0(video::IImage* surface, void* windowId, core::rect<s32>* src )
+{
 	// todo: implement window ID and src rectangle
 
 	if (!surface)
@@ -1527,6 +1686,7 @@ bool CIrrDeviceMacOSX::present(video::IImage* surface, void* windowId, core::rec
 
 	return false;
 }
+#endif
 
 
 #if defined (_IRR_COMPILE_WITH_JOYSTICK_EVENTS_)

@@ -41,7 +41,7 @@ using namespace irr;
 using namespace scene;
 
 /*
-Again, to be able to use the Irrlicht.DLL file, we need to link with the
+Again, to be able to use the Irrlicht.dll on Windows, we link with the
 Irrlicht.lib. We could set this option in the project settings, but
 to make it easy, we use a pragma comment lib:
 */
@@ -66,25 +66,25 @@ public:
 
 	bool OnEvent(const SEvent& event)
 	{
-		// check if user presses the key F9
 		if ((event.EventType == EET_KEY_INPUT_EVENT) &&
 				event.KeyInput.PressedDown)
 		{
+			// check if user presses the key F9 for making a screenshot
 			if (event.KeyInput.Key == KEY_F9)
 			{
 				video::IImage* image = Device->getVideoDriver()->createScreenShot();
 				if (image)
 				{
 					c8 buf[256];
-					snprintf_irr(buf, 256, "%s_shot%04d.jpg",
+					snprintf_irr(buf, 256, "%s_shot%04u.jpg",
 							FilenameTemplate.c_str(),
 							++Number);
 					Device->getVideoDriver()->writeImageToFile(image, buf, 85 );
 					image->drop();
 				}
 			}
-			else
-			if (event.KeyInput.Key == KEY_F8)
+			// Check for F8 - enabling/disabling display of bounding box for the map
+			else if (event.KeyInput.Key == KEY_F8)
 			{
 				if (Node->isDebugDataVisible())
 					Node->setDebugDataVisible(scene::EDS_OFF);
@@ -112,7 +112,7 @@ int IRRCALLCONV main(int argc, char* argv[])
 	/*
 	Like in the HelloWorld example, we create an IrrlichtDevice with
 	createDevice(). The difference now is that we ask the user to select
-	which hardware accelerated driver to use. The Software device would be
+	which hardware accelerated driver to use. The Software device might be
 	too slow to draw a huge Quake 3 map, but just for the fun of it, we make
 	this decision possible too.
 	*/
@@ -130,6 +130,7 @@ int IRRCALLCONV main(int argc, char* argv[])
 	if (device == 0)
 		return 1; // could not create selected driver.
 
+	// We allow passing a map name as command line parameter
 	const char* mapname=0;
 	if (argc>2)
 		mapname = argv[2];
@@ -170,7 +171,7 @@ int IRRCALLCONV main(int argc, char* argv[])
 
 	/*
 	Now we can load the mesh by calling getMesh(). We get a pointer returned
-	to a IAnimatedMesh. As you know, Quake 3 maps are not really animated,
+	to an IAnimatedMesh. As you know, Quake 3 maps are not really animated,
 	they are only a huge chunk of static geometry with some materials
 	attached. Hence the IAnimated mesh consists of only one frame,
 	so we get the "first frame" of the "animation", which is our quake level
@@ -203,9 +204,9 @@ int IRRCALLCONV main(int argc, char* argv[])
 	device->setEventReceiver(&screenshotFactory);
 
 	/*
-		now construct SceneNodes for each Shader
-		The Objects are stored in the quake mesh scene::E_Q3_MESH_ITEMS
-		and the Shader ID is stored in the MaterialParameters
+		now construct SceneNodes for each shader
+		The objects are stored in the quake mesh scene::E_Q3_MESH_ITEMS
+		and the shader ID is stored in the MaterialParameters
 		mostly dark looking skulls and moving lava.. or green flashing tubes?
 	*/
 	if ( mesh )
@@ -253,9 +254,9 @@ int IRRCALLCONV main(int argc, char* argv[])
 	}
 
 	/*
-	Now we only need a Camera to look at the Quake 3 map. And we want to
+	Now we only need a camera to look at the Quake 3 map. And we want to
 	create a user controlled camera. There are some different cameras
-	available in the Irrlicht engine. For example the Maya Camera which can
+	available in the Irrlicht engine. For example the Maya camera which can
 	be controlled comparable to the camera in Maya: Rotate with left mouse
 	button pressed, Zoom with both buttons pressed, translate with right
 	mouse button pressed. This could be created with
@@ -266,8 +267,8 @@ int IRRCALLCONV main(int argc, char* argv[])
 	scene::ICameraSceneNode* camera = smgr->addCameraSceneNodeFPS();
 
 	/*
-		so we need a good starting Position in the level.
-		we can ask the Quake3 Loader for all entities with class_name
+		so we need a good starting position in the level.
+		we can ask the Quake3 loader for all entities with class_name
 		"info_player_deathmatch"
 		we choose a random launch
 	*/
@@ -318,7 +319,7 @@ int IRRCALLCONV main(int argc, char* argv[])
 	device->getCursorControl()->setVisible(false);
 
 	// load the engine logo
-	gui->addImage(driver->getTexture("irrlichtlogo2.png"),
+	gui->addImage(driver->getTexture("irrlichtlogo3.png"),
 			core::position2d<s32>(10, 10));
 
 	// show the driver logo
@@ -334,6 +335,8 @@ int IRRCALLCONV main(int argc, char* argv[])
 			break;
 		case video::EDT_DIRECT3D9:
 			gui->addImage(driver->getTexture("directxlogo.png"), pos);
+			break;
+		default:
 			break;
 	}
 
@@ -354,27 +357,29 @@ int IRRCALLCONV main(int argc, char* argv[])
 		gui->drawAll();
 		driver->endScene();
 
+		// Display some info
+		// Setting window caption can be rather slow, so usually shouldn't be done each frame.
 		int fps = driver->getFPS();
-		//if (lastFPS != fps)
+		if (1 || lastFPS != fps)
 		{
-			io::IAttributes * const attr = smgr->getParameters();
 			core::stringw str = L"Q3 [";
 			str += driver->getName();
-			str += "] FPS:";
+			str += L"] FPS:";
 			str += fps;
 #ifdef _IRR_SCENEMANAGER_DEBUG			
-			str += " Cull:";
+			io::IAttributes * const attr = smgr->getParameters();
+			str += L" Cull:";
 			str += attr->getAttributeAsInt("calls");
-			str += "/";
+			str += L"/";
 			str += attr->getAttributeAsInt("culled");
-			str += " Draw: ";
+			str += L" Draw: ";
 			str += attr->getAttributeAsInt("drawn_solid");
-			str += "/";
+			str += L"/";
 			str += attr->getAttributeAsInt("drawn_transparent");
-			str += "/";
+			str += L"/";
 			str += attr->getAttributeAsInt("drawn_transparent_effect");
 #endif
-			device->setWindowCaption(str.c_str());
+			device->setWindowCaption(str.c_str());	
 			lastFPS = fps;
 		}
 	}

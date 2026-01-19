@@ -5,8 +5,8 @@
 #include "CAnimatedMeshSceneNode.h"
 #include "IVideoDriver.h"
 #include "ISceneManager.h"
-#include "S3DVertex.h"
 #include "os.h"
+#include "IFileSystem.h"
 #ifdef _IRR_COMPILE_WITH_SHADOW_VOLUME_SCENENODE_
 #include "CShadowVolumeSceneNode.h"
 #else
@@ -14,9 +14,7 @@
 #endif // _IRR_COMPILE_WITH_SHADOW_VOLUME_SCENENODE_
 #include "IAnimatedMeshMD3.h"
 #include "CSkinnedMesh.h"
-#include "IDummyTransformationSceneNode.h"
 #include "IBoneSceneNode.h"
-#include "IMaterialRenderer.h"
 #include "IMesh.h"
 #include "IMeshCache.h"
 #include "IAnimatedMesh.h"
@@ -47,7 +45,7 @@ CAnimatedMeshSceneNode::CAnimatedMeshSceneNode(IAnimatedMesh* mesh,
 	setDebugName("CAnimatedMeshSceneNode");
 	#endif
 
-	setMesh(mesh);
+	setMesh(mesh, true);
 }
 
 
@@ -112,12 +110,12 @@ void CAnimatedMeshSceneNode::buildFrameNr(u32 timeMs)
 		if (FramesPerSecond > 0.f) //forwards...
 		{
 			if (CurrentFrameNr > EndFrame)
-				CurrentFrameNr = StartFrame + fmod(CurrentFrameNr - StartFrame, (f32)(EndFrame-StartFrame));
+				CurrentFrameNr = StartFrame + fmodf(CurrentFrameNr - StartFrame, (f32)(EndFrame-StartFrame));
 		}
 		else //backwards...
 		{
 			if (CurrentFrameNr < StartFrame)
-				CurrentFrameNr = EndFrame - fmod(EndFrame - CurrentFrameNr, (f32)(EndFrame-StartFrame));
+				CurrentFrameNr = EndFrame - fmodf(EndFrame - CurrentFrameNr, (f32)(EndFrame-StartFrame));
 		}
 	}
 	else
@@ -149,7 +147,7 @@ void CAnimatedMeshSceneNode::buildFrameNr(u32 timeMs)
 
 void CAnimatedMeshSceneNode::OnRegisterSceneNode()
 {
-	if (IsVisible)
+	if (IsVisible && Mesh)
 	{
 		// because this node supports rendering of mixed mode meshes consisting of
 		// transparent and solid material at the same time, we need to go through all
@@ -163,12 +161,12 @@ void CAnimatedMeshSceneNode::OnRegisterSceneNode()
 		int solidCount = 0;
 
 		// count transparent and solid materials in this scene node
-		for (u32 i=0; i<Materials.size(); ++i)
+		const u32 numMaterials = ReadOnlyMaterials ? Mesh->getMeshBufferCount() : Materials.size();
+		for (u32 i=0; i<numMaterials; ++i)
 		{
-			video::IMaterialRenderer* rnd =
-				driver->getMaterialRenderer(Materials[i].MaterialType);
+			const video::SMaterial& material = ReadOnlyMaterials ? Mesh->getMeshBuffer(i)->getMaterial() : Materials[i];
 
-			if ((rnd && rnd->isTransparent()) || Materials[i].isTransparent())
+			if ( driver->needsTransparentRenderPass(material) )
 				++transparentCount;
 			else
 				++solidCount;
@@ -206,7 +204,7 @@ IMesh * CAnimatedMeshSceneNode::getMeshForCurrentFrame()
 		// As multiple scene nodes may be sharing the same skinned mesh, we have to
 		// re-animate it every frame to ensure that this node gets the mesh that it needs.
 
-		CSkinnedMesh* skinnedMesh = reinterpret_cast<CSkinnedMesh*>(Mesh);
+		CSkinnedMesh* skinnedMesh = static_cast<CSkinnedMesh*>(Mesh);
 
 		if (JointMode == EJUOR_CONTROL)//write to mesh
 			skinnedMesh->transferJointsToMesh(JointChildSceneNodes);
@@ -274,7 +272,7 @@ void CAnimatedMeshSceneNode::render()
 		return;
 
 
-	bool isTransparentPass =
+	const bool isTransparentPass =
 		SceneManager->getSceneNodeRenderPass() == scene::ESNRP_TRANSPARENT;
 
 	++PassCount;
@@ -315,7 +313,7 @@ void CAnimatedMeshSceneNode::render()
 				if (RenderFromIdentity)
 					driver->setTransform(video::ETS_WORLD, core::IdentityMatrix );
 				else if (Mesh->getMeshType() == EAMT_SKINNED)
-					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((SSkinMeshBuffer*)mb)->Transformation);
+					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((const SSkinMeshBuffer*)mb)->Transformation);
 
 				driver->setMaterial(mat);
 				driver->drawMeshBuffer(mb);
@@ -329,8 +327,7 @@ void CAnimatedMeshSceneNode::render()
 	{
 		for (u32 i=0; i<m->getMeshBufferCount(); ++i)
 		{
-			video::IMaterialRenderer* rnd = driver->getMaterialRenderer(Materials[i].MaterialType);
-			bool transparent = (rnd && rnd->isTransparent());
+			const bool transparent = driver->needsTransparentRenderPass(Materials[i]);
 
 			// only render transparent buffer if this is the transparent render pass
 			// and solid only in solid pass
@@ -341,7 +338,7 @@ void CAnimatedMeshSceneNode::render()
 				if (RenderFromIdentity)
 					driver->setTransform(video::ETS_WORLD, core::IdentityMatrix );
 				else if (Mesh->getMeshType() == EAMT_SKINNED)
-					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((SSkinMeshBuffer*)mb)->Transformation);
+					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((const SSkinMeshBuffer*)mb)->Transformation);
 
 				driver->setMaterial(material);
 				driver->drawMeshBuffer(mb);
@@ -372,7 +369,7 @@ void CAnimatedMeshSceneNode::render()
 				if (RenderFromIdentity)
 					driver->setTransform(video::ETS_WORLD, core::IdentityMatrix );
 				else if (Mesh->getMeshType() == EAMT_SKINNED)
-					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((SSkinMeshBuffer*)mb)->Transformation);
+					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((const SSkinMeshBuffer*)mb)->Transformation);
 
 				driver->drawMeshBufferNormals(mb, debugNormalLength, debugNormalColor);
 			}
@@ -393,7 +390,7 @@ void CAnimatedMeshSceneNode::render()
 				const IMeshBuffer* mb = m->getMeshBuffer(g);
 
 				if (Mesh->getMeshType() == EAMT_SKINNED)
-					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((SSkinMeshBuffer*)mb)->Transformation);
+					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((const SSkinMeshBuffer*)mb)->Transformation);
 				driver->draw3DBox(mb->getBoundingBox(), video::SColor(255,190,128,128));
 			}
 		}
@@ -467,7 +464,7 @@ void CAnimatedMeshSceneNode::render()
 				if (RenderFromIdentity)
 					driver->setTransform(video::ETS_WORLD, core::IdentityMatrix );
 				else if (Mesh->getMeshType() == EAMT_SKINNED)
-					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((SSkinMeshBuffer*)mb)->Transformation);
+					driver->setTransform(video::ETS_WORLD, AbsoluteTransformation * ((const SSkinMeshBuffer*)mb)->Transformation);
 				driver->drawMeshBuffer(mb);
 			}
 		}
@@ -533,11 +530,7 @@ const core::aabbox3d<f32>& CAnimatedMeshSceneNode::getBoundingBox() const
 }
 
 
-//! returns the material based on the zero based index i. To get the amount
-//! of materials used by this scene node, use getMaterialCount().
-//! This function is needed for inserting the node into the scene hirachy on a
-//! optimal position for minimizing renderstate changes, but can also be used
-//! to directly modify the material of a scene node.
+//! returns the material based on the zero based index i.
 video::SMaterial& CAnimatedMeshSceneNode::getMaterial(u32 i)
 {
 	if (i >= Materials.size())
@@ -812,7 +805,7 @@ void CAnimatedMeshSceneNode::deserializeAttributes(io::IAttributes* in, io::SAtt
 		IAnimatedMesh* newAnimatedMesh = SceneManager->getMesh(newMeshStr.c_str());
 
 		if (newAnimatedMesh)
-			setMesh(newAnimatedMesh);
+			setMesh(newAnimatedMesh, true);
 	}
 
 	// TODO: read animation names instead of frame begin and ends
@@ -820,7 +813,7 @@ void CAnimatedMeshSceneNode::deserializeAttributes(io::IAttributes* in, io::SAtt
 
 
 //! Sets a new mesh
-void CAnimatedMeshSceneNode::setMesh(IAnimatedMesh* mesh)
+void CAnimatedMeshSceneNode::setMesh(IAnimatedMesh* mesh, bool copyMeshMaterials)
 {
 	if (!mesh)
 		return; // won't set null mesh
@@ -840,7 +833,7 @@ void CAnimatedMeshSceneNode::setMesh(IAnimatedMesh* mesh)
 	Box = Mesh->getBoundingBox();
 
 	IMesh* m = Mesh->getMesh(0,0);
-	if (m)
+	if (m && copyMeshMaterials)
 	{
 		Materials.clear();
 		Materials.reallocate(m->getMeshBufferCount());
@@ -954,7 +947,7 @@ void CAnimatedMeshSceneNode::animateJoints(bool CalculateAbsolutePositions)
 		checkJoints();
 		const f32 frame = getFrameNr(); //old?
 
-		CSkinnedMesh* skinnedMesh=reinterpret_cast<CSkinnedMesh*>(Mesh);
+		CSkinnedMesh* skinnedMesh=static_cast<CSkinnedMesh*>(Mesh);
 
 		skinnedMesh->transferOnlyJointsHintsToMesh( JointChildSceneNodes );
 		skinnedMesh->animateMesh(frame, 1.0f);

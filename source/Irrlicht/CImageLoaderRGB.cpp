@@ -130,7 +130,6 @@ DUMMY -		This 404 bytes of data should be set to 0. This makes the Header exactl
 #include "CColorConverter.h"
 #include "CImage.h"
 #include "os.h"
-#include "irrString.h"
 
 
 namespace irr
@@ -555,7 +554,7 @@ void CImageLoaderRGB::readRGBrow(u8 *buf, int y, int z, io::IReadFile* file, rgb
 		// limit the count value to the remaining row size
 		if (oPtr + count*rgb.Header.BPC > buf + rgb.Header.Xsize * rgb.Header.BPC)
 		{
-			count = ( (buf + rgb.Header.Xsize * rgb.Header.BPC) - oPtr ) / rgb.Header.BPC;
+			count = (s32)( (buf + rgb.Header.Xsize * rgb.Header.BPC) - oPtr ) / rgb.Header.BPC;
 		}
 
 		if (count<=0)

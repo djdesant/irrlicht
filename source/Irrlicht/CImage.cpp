@@ -3,10 +3,10 @@
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
 #include "CImage.h"
-#include "irrString.h"
 #include "CColorConverter.h"
 #include "CBlit.h"
 #include "os.h"
+#include "SoftwareDriver2_helper.h"
 
 namespace irr
 {
@@ -23,9 +23,8 @@ CImage::CImage(ECOLOR_FORMAT format, const core::dimension2d<u32>& size, void* d
 	}
 	else
 	{
-		const u32 dataSize = getDataSizeFromFormat(Format, Size.Width, Size.Height);
-
-		Data = new u8[dataSize];
+		const size_t dataSize = getDataSizeFromFormat(Format, Size.Width, Size.Height);
+		Data = new u8[align_next(dataSize,16)];
 		memcpy(Data, data, dataSize);
 		DeleteMemory = true;
 	}
@@ -35,7 +34,8 @@ CImage::CImage(ECOLOR_FORMAT format, const core::dimension2d<u32>& size, void* d
 //! Constructor of empty image
 CImage::CImage(ECOLOR_FORMAT format, const core::dimension2d<u32>& size) : IImage(format, size, true)
 {
-	Data = new u8[getDataSizeFromFormat(Format, Size.Width, Size.Height)];
+	const size_t dataSize = getDataSizeFromFormat(Format, Size.Width, Size.Height);
+	Data = new u8[align_next(dataSize,16)];
 	DeleteMemory = true;
 }
 
@@ -43,12 +43,6 @@ CImage::CImage(ECOLOR_FORMAT format, const core::dimension2d<u32>& size) : IImag
 //! sets a pixel
 void CImage::setPixel(u32 x, u32 y, const SColor &color, bool blend)
 {
-	if (IImage::isCompressedFormat(Format))
-	{
-		os::Printer::log("IImage::setPixel method doesn't work with compressed images.", ELL_WARNING);
-		return;
-	}
-
 	if (x >= Size.Width || y >= Size.Height)
 		return;
 
@@ -79,10 +73,17 @@ void CImage::setPixel(u32 x, u32 y, const SColor &color, bool blend)
 			u32 * dest = (u32*) (Data + ( y * Pitch ) + ( x << 2 ));
 			*dest = blend ? PixelBlend32 ( *dest, color.color ) : color.color;
 		} break;
-#ifndef _DEBUG
+
+		IRR_CASE_IIMAGE_COMPRESSED_FORMAT
+			os::Printer::log("IImage::setPixel method doesn't work with compressed images.", ELL_WARNING);
+			return;
+
+		case ECF_UNKNOWN:
+			os::Printer::log("IImage::setPixel unknown format.", ELL_WARNING);
+			return;
+
 		default:
 			break;
-#endif
 	}
 }
 
@@ -90,12 +91,6 @@ void CImage::setPixel(u32 x, u32 y, const SColor &color, bool blend)
 //! returns a pixel
 SColor CImage::getPixel(u32 x, u32 y) const
 {
-	if (IImage::isCompressedFormat(Format))
-	{
-		os::Printer::log("IImage::getPixel method doesn't work with compressed images.", ELL_WARNING);
-		return SColor(0);
-	}
-
 	if (x >= Size.Width || y >= Size.Height)
 		return SColor(0);
 
@@ -112,10 +107,17 @@ SColor CImage::getPixel(u32 x, u32 y) const
 			u8* p = Data+(y*3)*Size.Width + (x*3);
 			return SColor(255,p[0],p[1],p[2]);
 		}
-#ifndef _DEBUG
+
+	IRR_CASE_IIMAGE_COMPRESSED_FORMAT
+		os::Printer::log("IImage::getPixel method doesn't work with compressed images.", ELL_WARNING);
+		break;
+
+	case ECF_UNKNOWN:
+		os::Printer::log("IImage::getPixel unknown format.", ELL_WARNING);
+		break;
+
 	default:
 		break;
-#endif
 	}
 
 	return SColor(0);
@@ -131,7 +133,14 @@ void CImage::copyTo(IImage* target, const core::position2d<s32>& pos)
 		return;
 	}
 
-	Blit(BLITTER_TEXTURE, target, 0, &pos, this, 0, 0);
+	if (!Blit(BLITTER_TEXTURE, target, 0, &pos, this, 0, 0)
+		&& target && pos.X == 0 && pos.Y == 0 &&
+		CColorConverter::canConvertFormat(Format, target->getColorFormat()))
+	{
+		// No fast blitting, but copyToScaling uses other color conversions and might work
+		irr::core::dimension2du dim(target->getDimension());
+		copyToScaling(target->getData(), dim.Width, dim.Height, target->getColorFormat(), target->getPitch());
+	}
 }
 
 
@@ -157,16 +166,9 @@ void CImage::copyToWithAlpha(IImage* target, const core::position2d<s32>& pos, c
 		return;
 	}
 
-	if ( combineAlpha )
-	{
-		Blit(BLITTER_TEXTURE_COMBINE_ALPHA, target, clipRect, &pos, this, &sourceRect, color.color);
-	}
-	else
-	{
-		// color blend only necessary on not full spectrum aka. color.color != 0xFFFFFFFF
-		Blit(color.color == 0xFFFFFFFF ? BLITTER_TEXTURE_ALPHA_BLEND: BLITTER_TEXTURE_ALPHA_COLOR_BLEND,
-				target, clipRect, &pos, this, &sourceRect, color.color);
-	}
+	eBlitter op = combineAlpha ? BLITTER_TEXTURE_COMBINE_ALPHA :
+		color.color == 0xFFFFFFFF ? BLITTER_TEXTURE_ALPHA_BLEND : BLITTER_TEXTURE_ALPHA_COLOR_BLEND;
+	Blit(op,target, clipRect, &pos, this, &sourceRect, color.color);
 }
 
 
@@ -191,7 +193,7 @@ void CImage::copyToScaling(void* target, u32 width, u32 height, ECOLOR_FORMAT fo
 	{
 		if (pitch==Pitch)
 		{
-			memcpy(target, Data, height*pitch);
+			memcpy(target, Data, (size_t)height*pitch);
 			return;
 		}
 		else
@@ -213,20 +215,28 @@ void CImage::copyToScaling(void* target, u32 width, u32 height, ECOLOR_FORMAT fo
 		}
 	}
 
-	const f32 sourceXStep = (f32)Size.Width / (f32)width;
-	const f32 sourceYStep = (f32)Size.Height / (f32)height;
+	// NOTE: Scaling is coded to keep the border pixels intact.
+	// Alternatively we could for example work with first pixel being taken at half step-size.
+	// Then we have one more step here and it would be:
+	//     sourceXStep = (f32)(Size.Width-1) / (f32)(width);
+	//     And sx would start at 0.5f + sourceXStep / 2.f;
+	//     Similar for y.
+	// As scaling is done without any antialiasing it doesn't matter too much which outermost pixels we use and keeping
+	// border pixels intact is probably mostly better (with AA the other solution would be more correct).
+	const f32 sourceXStep = width > 1 ? (f32)(Size.Width-1) / (f32)(width-1) : 0.f;
+	const f32 sourceYStep = height > 1 ? (f32)(Size.Height-1) / (f32)(height-1) : 0.f;
 	s32 yval=0, syval=0;
-	f32 sy = 0.0f;
+	f32 sy = 0.5f;	// for rounding to nearest pixel
 	for (u32 y=0; y<height; ++y)
 	{
-		f32 sx = 0.0f;
+		f32 sx = 0.5f;	// for rounding to nearest pixel
 		for (u32 x=0; x<width; ++x)
 		{
 			CColorConverter::convert_viaFormat(Data+ syval + ((s32)sx)*BytesPerPixel, Format, 1, ((u8*)target)+ yval + (x*bpp), format);
 			sx+=sourceXStep;
 		}
 		sy+=sourceYStep;
-		syval=((s32)sy)*Pitch;
+		syval=(s32)(sy)*Pitch;
 		yval+=pitch;
 	}
 }
@@ -273,8 +283,8 @@ void CImage::copyToScalingBoxFilter(IImage* target, s32 bias, bool blend)
 
 	target->getData();
 
-	s32 fx = core::ceil32( sourceXStep );
-	s32 fy = core::ceil32( sourceYStep );
+	const s32 fx = core::ceil32( sourceXStep );
+	const s32 fy = core::ceil32( sourceYStep );
 	f32 sx;
 	f32 sy;
 
@@ -321,8 +331,8 @@ void CImage::fill(const SColor &color)
 		{
 			u8 rgb[3];
 			CColorConverter::convert_A8R8G8B8toR8G8B8(&color, 1, rgb);
-			const u32 size = getImageDataSizeInBytes();
-			for (u32 i=0; i<size; i+=3)
+			const size_t size = getImageDataSizeInBytes();
+			for (size_t i=0; i<size; i+=3)
 			{
 				memcpy(Data+i, rgb, 3);
 			}
@@ -336,16 +346,71 @@ void CImage::fill(const SColor &color)
 	memset32( Data, c, getImageDataSizeInBytes() );
 }
 
+void CImage::flip(bool topBottom, bool leftRight)
+{
+	if ( !topBottom && !leftRight)
+		return;
+
+	const core::dimension2du dim(getDimension());
+	if ( dim.Width == 0 || dim.Height == 0 )
+		return;
+
+	u8* data = (u8*)getData();
+	if (!data) 
+		return;
+
+	const u32 bpp = getBytesPerPixel();
+	const u32 pitch = getPitch();
+
+	if ( topBottom )
+	{
+		for ( u32 i=0; i<dim.Height/2; ++i)
+		{
+			// Reverse bottom/top lines
+			u8* l1 = data+i*pitch;
+			u8* l2 = data+(dim.Height-1-i)*pitch;
+			for ( u32 b=0; b<pitch; ++b)
+			{
+				irr::u8 dummy = *l1;
+				*l1 = *l2;
+				*l2 = dummy;
+				++l1;
+				++l2;
+			}
+		}
+	}
+	if ( leftRight )
+	{
+		for ( u32 i=0; i<dim.Height; ++i)
+		{
+			// Reverse left/right for each line
+			u8* l1 = data+i*pitch;
+			u8* l2 = l1+(dim.Width-1)*bpp;
+			for ( u32 p=0; p<dim.Width/2; ++p)
+			{
+				for ( u32 b=0; b<bpp; ++b)
+				{
+					irr::u8 dummy = l1[b];
+					l1[b] = l2[b];
+					l2[b] = dummy;
+				}
+				l1 += bpp;
+				l2 -= bpp;
+			}
+		}
+	}
+}
 
 //! get a filtered pixel
-inline SColor CImage::getPixelBox( s32 x, s32 y, s32 fx, s32 fy, s32 bias ) const
+inline SColor CImage::getPixelBox( const s32 x, const s32 y, const s32 fx, const s32 fy, const s32 bias ) const
 {
+/*
 	if (IImage::isCompressedFormat(Format))
 	{
 		os::Printer::log("IImage::getPixelBox method doesn't work with compressed images.", ELL_WARNING);
 		return SColor(0);
 	}
-
+*/
 	SColor c;
 	s32 a = 0, r = 0, g = 0, b = 0;
 
@@ -365,16 +430,17 @@ inline SColor CImage::getPixelBox( s32 x, s32 y, s32 fx, s32 fy, s32 bias ) cons
 
 	}
 
-	s32 sdiv = s32_log2_s32(fx * fy);
+	const s32 sdiv = fx * fy; // s32_log2_s32(fx * fy);
 
-	a = core::s32_clamp( ( a >> sdiv ) + bias, 0, 255 );
-	r = core::s32_clamp( ( r >> sdiv ) + bias, 0, 255 );
-	g = core::s32_clamp( ( g >> sdiv ) + bias, 0, 255 );
-	b = core::s32_clamp( ( b >> sdiv ) + bias, 0, 255 );
+	a = core::s32_clamp( ( a / sdiv ) + bias, 0, 255 );
+	r = core::s32_clamp( ( r / sdiv ) + bias, 0, 255 );
+	g = core::s32_clamp( ( g / sdiv ) + bias, 0, 255 );
+	b = core::s32_clamp( ( b / sdiv ) + bias, 0, 255 );
 
 	c.set( a, r, g, b );
 	return c;
 }
+
 
 
 } // end namespace video

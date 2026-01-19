@@ -255,7 +255,7 @@ void loadModel(const io::path& filename)
 	// that's not so simple. so we do it brute force
 	gui::IGUIContextMenu* menu = (gui::IGUIContextMenu*)Device->getGUIEnvironment()->getRootGUIElement()->getElementFromId(GUI_ID_TOGGLE_DEBUG_INFO, true);
 	if (menu)
-		for(int item = 1; item < 6; ++item)
+		for(int item = 1; item < 7; ++item)
 			menu->setItemChecked(item, false);
 	updateScaleInfo(Model);
 }
@@ -978,7 +978,7 @@ int main(int argc, char* argv[])
 
 	// load the irrlicht engine logo
 	IGUIImage *img =
-		env->addImage(driver->getTexture("irrlichtlogo2.png"),
+		env->addImage(driver->getTexture("irrlichtlogo3.png"),
 			core::position2d<s32>(10, driver->getScreenSize().Height - 128));
 
 	// lock the logo's edges to the bottom left corner of the screen

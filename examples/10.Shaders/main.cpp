@@ -48,32 +48,74 @@ class MyShaderCallBack : public video::IShaderConstantSetCallBack
 {
 public:
 	MyShaderCallBack() : WorldViewProjID(-1), TransWorldID(-1), InvWorldID(-1), PositionID(-1),
-						ColorID(-1), TextureID(-1), FirstUpdate(true)
+						ColorID(-1), TextureID(-1), EmissiveID(-1)
 	{
+		for ( int i=0; i<4; ++i )
+			Emissive[i] = 0.f;
+	}
+
+	virtual void OnCreate(video::IMaterialRendererServices* services, s32 userData)
+	{
+		if (UseHighLevelShaders)
+		{
+			// Get shader constants id.
+			// Constants are "uniforms" in other shading languages.
+			// And they are not constant at all but can be changed before every draw call
+			// (the naming probably comes from Direct3D where they are called constants)
+			WorldViewProjID = services->getVertexShaderConstantID("mWorldViewProj");
+			TransWorldID = services->getVertexShaderConstantID("mTransWorld");
+			InvWorldID = services->getVertexShaderConstantID("mInvWorld");
+			PositionID = services->getVertexShaderConstantID("mLightPos");
+			ColorID = services->getVertexShaderConstantID("mLightColor");
+			EmissiveID = services->getPixelShaderConstantID("mEmissive");
+
+			// Textures ID are important only for OpenGL interface.
+			video::IVideoDriver* driver = services->getVideoDriver();
+			if(driver->getDriverType() == video::EDT_OPENGL)
+				TextureID = services->getVertexShaderConstantID("myTexture");
+		}
+
+		// Set light color 
+		// That could be set as well in OnSetConstants, but there's some cost to setting shader constants
+		// So when we have non-changing shader constants it's more performant to set them only once.
+		video::SColorf col(0.0f,1.0f,1.0f,0.0f);
+		if (UseHighLevelShaders)
+		{
+			services->setVertexShaderConstant(ColorID, reinterpret_cast<f32*>(&col), 4);
+
+			// Note: Since Irrlicht 1.9 it's possible to call setVertexShaderConstant 
+			// from anywhere. To do that save the services pointer here in OnCreate, it
+			// won't change as long as you use one IShaderConstantSetCallBack per shader
+			// material. But when calling it ouside of IShaderConstantSetCallBack functions
+			// you have to call services->startUseProgram()stopUseProgram() before/after doing so. 
+			// At least for high-level shader constants, low level constants are not attached
+			// to programs, so for those it doesn't matter.
+			// Doing that sometimes makes sense for performance reasons, like for constants which
+			// do only change once per frame or even less.
+		}
+		else
+			services->setVertexShaderConstant(reinterpret_cast<f32*>(&col), 9, 1);
+	}
+
+	// Called when any SMaterial value changes
+	virtual void OnSetMaterial(const irr::video::SMaterial& material)
+	{
+		// Remember material values to pass them on to shader in OnSetConstants
+		Emissive[0] = material.EmissiveColor.getRed() / 255.0f;
+		Emissive[1] = material.EmissiveColor.getGreen() / 255.0f;
+		Emissive[2] = material.EmissiveColor.getBlue() / 255.0f;
+		Emissive[3] = material.EmissiveColor.getAlpha() / 255.0f;
+
+		// Note: Until Irrlicht 1.8 it was possible to use gl_FrontMaterial in glsl
+		// This is no longer supported since Irrlicht 1.9
+		// Reason: Passing always every material value is slow, harder to port 
+		//         and generally getting deprecated in newer shader systems.
 	}
 
 	virtual void OnSetConstants(video::IMaterialRendererServices* services,
 			s32 userData)
 	{
 		video::IVideoDriver* driver = services->getVideoDriver();
-
-		// get shader constants id.
-
-		if (UseHighLevelShaders && FirstUpdate)
-		{
-			WorldViewProjID = services->getVertexShaderConstantID("mWorldViewProj");
-			TransWorldID = services->getVertexShaderConstantID("mTransWorld");
-			InvWorldID = services->getVertexShaderConstantID("mInvWorld");
-			PositionID = services->getVertexShaderConstantID("mLightPos");
-			ColorID = services->getVertexShaderConstantID("mLightColor");
-
-			// Textures ID are important only for OpenGL interface.
-
-			if(driver->getDriverType() == video::EDT_OPENGL)
-				TextureID = services->getVertexShaderConstantID("myTexture");
-
-			FirstUpdate = false;
-		}
 
 		// set inverted world matrix
 		// if we are using highlevel shaders (the user can select this when
@@ -109,16 +151,6 @@ public:
 		else
 			services->setVertexShaderConstant(reinterpret_cast<f32*>(&pos), 8, 1);
 
-		// set light color
-
-		video::SColorf col(0.0f,1.0f,1.0f,0.0f);
-
-		if (UseHighLevelShaders)
-			services->setVertexShaderConstant(ColorID,
-					reinterpret_cast<f32*>(&col), 4);
-		else
-			services->setVertexShaderConstant(reinterpret_cast<f32*>(&col), 9, 1);
-
 		// set transposed world matrix
 
 		core::matrix4 world = driver->getTransform(video::ETS_WORLD);
@@ -134,6 +166,12 @@ public:
 		}
 		else
 			services->setVertexShaderConstant(world.pointer(), 10, 4);
+
+		// Set material values
+		if (UseHighLevelShaders)
+		{
+			services->setPixelShaderConstant(EmissiveID, Emissive, 4);
+		}
 	}
 
 private:
@@ -144,7 +182,8 @@ private:
 	s32 ColorID;
 	s32 TextureID;
 
-	bool FirstUpdate;
+	s32 EmissiveID;
+	irr::f32 Emissive[4];
 };
 
 /*
@@ -228,6 +267,14 @@ int main()
 			vsFileName = mediaPath + "opengl.vsh";
 		}
 		break;
+	case video::EDT_BURNINGSVIDEO:
+		UseHighLevelShaders = true;
+		psFileName = mediaPath + "opengl.frag";
+		vsFileName = mediaPath + "opengl.vert";
+		break;
+
+	default:
+		break;
 	}
 
 	/*
@@ -280,6 +327,11 @@ int main()
 
 	To demonstrate this, we create two materials with a different base
 	material, one with EMT_SOLID and one with EMT_TRANSPARENT_ADD_COLOR.
+	The role of the base material is to set the alpha (transparency)
+	and blending settings as used in the base material. Avoid the 
+	EMT_NORMAL_... or EMT_PARALLAX... types as base materials as they
+	are internally shaders themselves and will only create conflicts with 
+	your shaders.
 	*/
 
 	// create materials
@@ -368,6 +420,7 @@ int main()
 	node->setMaterialFlag(video::EMF_LIGHTING, false);
 	node->setMaterialFlag(video::EMF_BLEND_OPERATION, true);
 	node->setMaterialType((video::E_MATERIAL_TYPE)newMaterialType2);
+	node->getMaterial(0).EmissiveColor = irr::video::SColor(0,50,0,50);
 
 	smgr->addTextSceneNode(gui->getBuiltInFont(),
 			L"PS & VS & EMT_TRANSPARENT",
@@ -437,7 +490,7 @@ int main()
 		{
 			core::stringw str = L"Irrlicht Engine - Vertex and pixel shader example [";
 			str += driver->getName();
-			str += "] FPS:";
+			str += L"] FPS:";
 			str += fps;
 
 			device->setWindowCaption(str.c_str());

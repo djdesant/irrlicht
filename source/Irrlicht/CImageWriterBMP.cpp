@@ -9,7 +9,7 @@
 #include "CImageLoaderBMP.h"
 #include "IWriteFile.h"
 #include "CColorConverter.h"
-#include "irrString.h"
+#include "os.h"
 
 namespace irr
 {
@@ -61,7 +61,7 @@ bool CImageWriterBMP::writeImage(io::IWriteFile* file, IImage* image, u32 param)
 	imageHeader.FileSize = imageHeader.BitmapDataOffset + imageHeader.BitmapDataSize;
 
 	// bitmaps are stored upside down and padded so we always do this
-	void (*CColorConverter_convertFORMATtoFORMAT)(const void*, s32, void*) = 0;
+	void (*CColorConverter_convertFORMATtoFORMAT)(const void*, u32, void*) = 0;
 	switch(image->getColorFormat())
 	{
 	case ECF_R8G8B8:
@@ -80,10 +80,9 @@ bool CImageWriterBMP::writeImage(io::IWriteFile* file, IImage* image, u32 param)
 		CColorConverter_convertFORMATtoFORMAT
 			= CColorConverter::convert_R5G6B5toR8G8B8;
 		break;
-#ifndef _DEBUG
 	default:
+		os::Printer::log("CImageWriterBMP does not support image format", ColorFormatNames[image->getColorFormat()], ELL_WARNING);
 		break;
-#endif
 	}
 
 	// couldn't find a color converter

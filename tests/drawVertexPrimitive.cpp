@@ -72,8 +72,11 @@ bool testWithDriver(video::E_DRIVER_TYPE driverType)
 		}
  
 		// TODO: mode is buggy, but required for skybox. So driver supports it, but would core dump here.
+		//burning v0.53 works
+#if 0
 		if (driverType==video::EDT_BURNINGSVIDEO && Type==scene::EPT_TRIANGLE_FAN)
 			continue;
+#endif
 		driver->setMaterial(Buffer.Material);
 		driver->setTransform(video::ETS_WORLD, core::IdentityMatrix);
 		driver->drawVertexPrimitiveList(Buffer.getVertices(),
@@ -85,7 +88,7 @@ bool testWithDriver(video::E_DRIVER_TYPE driverType)
 		// we use character enumeration as we have more than 9 types
 		name.append(Type-scene::EPT_POINTS+'a');
 		name.append(".png");
-		result &= takeScreenshotAndCompareAgainstReference(driver, name.c_str(), 97.f);
+		result &= takeScreenshotAndCompareAgainstReference(driver, name.c_str(), 99.5f);
 	}
 
 	device->closeDevice();

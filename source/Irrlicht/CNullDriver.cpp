@@ -11,6 +11,7 @@
 #include "IImageLoader.h"
 #include "IImageWriter.h"
 #include "IMaterialRenderer.h"
+#include "IMeshSceneNode.h"
 #include "IAnimatedMeshSceneNode.h"
 #include "CMeshManipulator.h"
 #include "CColorConverter.h"
@@ -114,7 +115,8 @@ CNullDriver::CNullDriver(io::IFileSystem* io, const core::dimension2d<u32>& scre
 
 	setTextureCreationFlag(ETCF_ALWAYS_32_BIT, true);
 	setTextureCreationFlag(ETCF_CREATE_MIP_MAPS, true);
-	setTextureCreationFlag(ETCF_ALLOW_MEMORY_COPY, true);
+	setTextureCreationFlag(ETCF_AUTO_GENERATE_MIP_MAPS, true);
+	setTextureCreationFlag(ETCF_ALLOW_MEMORY_COPY, false);
 
 	ViewPort = core::rect<s32>(core::position2d<s32>(0,0), core::dimension2di(screenSize));
 
@@ -189,13 +191,13 @@ CNullDriver::CNullDriver(io::IFileSystem* io, const core::dimension2d<u32>& scre
 
 
 	// set ExposedData to 0
-	memset(&ExposedData, 0, sizeof(ExposedData));
+	memset((void*)&ExposedData, 0, sizeof(ExposedData));
 	for (u32 i=0; i<video::EVDF_COUNT; ++i)
 		FeatureEnabled[i]=true;
 
 	InitMaterial2D.AntiAliasing=video::EAAM_OFF;
 	InitMaterial2D.Lighting=false;
-	InitMaterial2D.ZWriteEnable=false;
+	InitMaterial2D.ZWriteEnable=video::EZW_OFF;
 	InitMaterial2D.ZBuffer=video::ECFN_DISABLED;
 	InitMaterial2D.UseMipMaps=false;
 	for (u32 i=0; i<video::MATERIAL_MAX_TEXTURES; ++i)
@@ -318,7 +320,6 @@ void CNullDriver::deleteAllTextures()
 
 bool CNullDriver::beginScene(u16 clearFlag, SColor clearColor, f32 clearDepth, u8 clearStencil, const SExposedVideoData& videoData, core::rect<s32>* sourceRect)
 {
-	core::clearFPUException();
 	PrimitivesDrawn = 0;
 	return true;
 }
@@ -432,12 +433,6 @@ void CNullDriver::renameTexture(ITexture* texture, const io::path& newName)
 
 ITexture* CNullDriver::addTexture(const core::dimension2d<u32>& size, const io::path& name, ECOLOR_FORMAT format)
 {
-	if (IImage::isRenderTargetOnlyFormat(format))
-	{
-		os::Printer::log("Could not create ITexture, format only supported for render target textures.", ELL_WARNING);
-		return 0;
-	}
-
 	if (0 == name.size())
 	{
 		os::Printer::log("Could not create ITexture, texture needs to have a non-empty name.", ELL_WARNING);
@@ -447,10 +442,7 @@ ITexture* CNullDriver::addTexture(const core::dimension2d<u32>& size, const io::
 	IImage* image = new CImage(format, size);
 	ITexture* t = 0;
 
-	core::array<IImage*> imageArray(1);
-	imageArray.push_back(image);
-
-	if (checkImage(imageArray))
+	if (checkImage(image->getColorFormat(), image->getDimension()))
 	{
 		t = createDeviceDependentTexture(name, image);
 	}
@@ -479,18 +471,14 @@ ITexture* CNullDriver::addTexture(const io::path& name, IImage* image)
 
 	ITexture* t = 0;
 
-	core::array<IImage*> imageArray(1);
-	imageArray.push_back(image);
-
-	if (checkImage(imageArray))
+	if (checkImage(image->getColorFormat(), image->getDimension()))
 	{
 		t = createDeviceDependentTexture(name, image);
-	}
-
-	if (t)
-	{
-		addTexture(t);
-		t->drop();
+		if (t)
+		{
+			addTexture(t);
+			t->drop();
+		}
 	}
 
 	return t;
@@ -515,12 +503,11 @@ ITexture* CNullDriver::addTextureCubemap(const io::path& name, IImage* imagePosX
 	if (checkImage(imageArray))
 	{
 		t = createDeviceDependentTextureCubemap(name, imageArray);
-	}
-
-	if (t)
-	{
-		addTexture(t);
-		t->drop();
+		if (t)
+		{
+			addTexture(t);
+			t->drop();
+		}
 	}
 
 	return t;
@@ -530,12 +517,6 @@ ITexture* CNullDriver::addTextureCubemap(const irr::u32 sideLen, const io::path&
 {
 	if ( 0 == sideLen )
 		return 0;
-
-	if (IImage::isRenderTargetOnlyFormat(format))
-	{
-		os::Printer::log("Could not create ITexture, format only supported for render target textures.", ELL_WARNING);
-		return 0;
-	}
 
 	if (0 == name.size())
 	{
@@ -682,7 +663,7 @@ video::ITexture* CNullDriver::loadTextureFromFile(io::IReadFile* file, const io:
 			}
 			break;
 		default:
-			_IRR_DEBUG_BREAK_IF(true);
+			IRR_DEBUG_BREAK_IF(true);
 			break;
 		}
 
@@ -789,7 +770,7 @@ bool CNullDriver::setRenderTarget(ITexture* texture, u16 clearFlag, SColor clear
 }
 
 //! sets a viewport
-void CNullDriver::setViewPort(const core::rect<s32>& area)
+void CNullDriver::setViewPort(const core::rect<s32>& area, bool clipToRenderTarget)
 {
 }
 
@@ -872,13 +853,17 @@ void CNullDriver::draw3DBox(const core::aabbox3d<f32>& box, SColor color)
 
 
 //! draws an 2d image
-void CNullDriver::draw2DImage(const video::ITexture* texture, const core::position2d<s32>& destPos)
+void CNullDriver::draw2DImage(const video::ITexture* texture, const core::position2d<s32>& destPos, bool useAlphaChannelOfTexture)
 {
 	if (!texture)
 		return;
 
 	draw2DImage(texture,destPos, core::rect<s32>(core::position2d<s32>(0,0),
-												core::dimension2di(texture->getOriginalSize())));
+												core::dimension2di(texture->getOriginalSize())),
+												0,
+												SColor(255,255,255,255),
+												useAlphaChannelOfTexture
+												);
 }
 
 
@@ -1080,7 +1065,7 @@ const wchar_t* CNullDriver::getName() const
 
 
 //! Draws a shadow volume into the stencil buffer. To draw a stencil shadow, do
-//! this: Frist, draw all geometry. Then use this method, to draw the shadow
+//! this: First, draw all geometry. Then use this method, to draw the shadow
 //! volume. Then, use IVideoDriver::drawStencilShadow() to visualize the shadow.
 void CNullDriver::drawStencilShadowVolume(const core::array<core::vector3df>& triangles, bool zfail, u32 debugDataVisible)
 {
@@ -1145,7 +1130,7 @@ const SLight& CNullDriver::getDynamicLight(u32 idx) const
 		return Lights[idx];
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(true)
+		IRR_DEBUG_BREAK_IF(true)
 		static const SLight dummy;
 		return dummy;
 	}
@@ -1438,88 +1423,91 @@ bool CNullDriver::checkPrimitiveCount(u32 prmCount) const
 
 bool CNullDriver::checkImage(const core::array<IImage*>& image) const
 {
-	bool status = true;
-
 	if (image.size() > 0)
 	{
 		ECOLOR_FORMAT lastFormat = image[0]->getColorFormat();
 		core::dimension2d<u32> lastSize = image[0]->getDimension();
 
-		for (u32 i = 0; i < image.size() && status; ++i)
+		for (u32 i = 0; i < image.size(); ++i)
 		{
 			ECOLOR_FORMAT format = image[i]->getColorFormat();
 			core::dimension2d<u32> size = image[i]->getDimension();
 
-			switch (format)
-			{
-			case ECF_DXT1:
-			case ECF_DXT2:
-			case ECF_DXT3:
-			case ECF_DXT4:
-			case ECF_DXT5:
-				if (!queryFeature(EVDF_TEXTURE_COMPRESSED_DXT))
-				{
-					os::Printer::log("DXT texture compression not available.", ELL_ERROR);
-					status = false;
-				}
-				else if (size.getOptimalSize(true, false) != size)
-				{
-					os::Printer::log("Invalid size of image for DXT texture, size of image must be power of two.", ELL_ERROR);
-					status = false;
-				}
-				break;
-			case ECF_PVRTC_RGB2:
-			case ECF_PVRTC_ARGB2:
-			case ECF_PVRTC_RGB4:
-			case ECF_PVRTC_ARGB4:
-				if (!queryFeature(EVDF_TEXTURE_COMPRESSED_PVRTC))
-				{
-					os::Printer::log("PVRTC texture compression not available.", ELL_ERROR);
-					status = false;
-				}
-				else if (size.getOptimalSize(true, false) != size)
-				{
-					os::Printer::log("Invalid size of image for PVRTC compressed texture, size of image must be power of two and squared.", ELL_ERROR);
-					status = false;
-				}
-				break;
-			case ECF_PVRTC2_ARGB2:
-			case ECF_PVRTC2_ARGB4:
-				if (!queryFeature(EVDF_TEXTURE_COMPRESSED_PVRTC2))
-				{
-					os::Printer::log("PVRTC2 texture compression not available.", ELL_ERROR);
-					status = false;
-				}
-				break;
-			case ECF_ETC1:
-				if (!queryFeature(EVDF_TEXTURE_COMPRESSED_ETC1))
-				{
-					os::Printer::log("ETC1 texture compression not available.", ELL_ERROR);
-					status = false;
-				}
-				break;
-			case ECF_ETC2_RGB:
-			case ECF_ETC2_ARGB:
-				if (!queryFeature(EVDF_TEXTURE_COMPRESSED_ETC2))
-				{
-					os::Printer::log("ETC2 texture compression not available.", ELL_ERROR);
-					status = false;
-				}
-				break;
-			default:
-				break;
-			}
-
 			if (format != lastFormat || size != lastSize)
-				status = false;
+				return false;
+
+			if ( !checkImage(format, size) )
+				return false;
 		}
+	
+		return true;
 	}
-	else
+	return false;
+}
+
+bool CNullDriver::checkImage(ECOLOR_FORMAT format, const core::dimension2du& size) const
+{
+	switch (format)
 	{
-		status = false;
+		case ECF_DXT1:
+		case ECF_DXT2:
+		case ECF_DXT3:
+		case ECF_DXT4:
+		case ECF_DXT5:
+			if (!queryFeature(EVDF_TEXTURE_COMPRESSED_DXT))
+			{
+				os::Printer::log("DXT texture compression not available.", ELL_ERROR);
+				return false;
+			}
+			else if (size.getOptimalSize(true, false) != size)
+			{
+				os::Printer::log("Invalid size of image for DXT texture, size of image must be power of two.", ELL_ERROR);
+				return false;
+			}
+			break;
+		case ECF_PVRTC_RGB2:
+		case ECF_PVRTC_ARGB2:
+		case ECF_PVRTC_RGB4:
+		case ECF_PVRTC_ARGB4:
+			if (!queryFeature(EVDF_TEXTURE_COMPRESSED_PVRTC))
+			{
+				os::Printer::log("PVRTC texture compression not available.", ELL_ERROR);
+				return false;
+			}
+			else if (size.getOptimalSize(true, false) != size)
+			{
+				os::Printer::log("Invalid size of image for PVRTC compressed texture, size of image must be power of two and squared.", ELL_ERROR);
+				return false;
+			}
+			break;
+		case ECF_PVRTC2_ARGB2:
+		case ECF_PVRTC2_ARGB4:
+			if (!queryFeature(EVDF_TEXTURE_COMPRESSED_PVRTC2))
+			{
+				os::Printer::log("PVRTC2 texture compression not available.", ELL_ERROR);
+				return false;
+			}
+			break;
+		case ECF_ETC1:
+			if (!queryFeature(EVDF_TEXTURE_COMPRESSED_ETC1))
+			{
+				os::Printer::log("ETC1 texture compression not available.", ELL_ERROR);
+				return false;
+			}
+			break;
+		case ECF_ETC2_RGB:
+		case ECF_ETC2_ARGB:
+			if (!queryFeature(EVDF_TEXTURE_COMPRESSED_ETC2))
+			{
+				os::Printer::log("ETC2 texture compression not available.", ELL_ERROR);
+				return false;
+			}
+			break;
+		default:
+			break;
 	}
 
-	return status;
+	return true;
 }
 
 //! Enables or disables a texture creation flag.
@@ -1607,7 +1595,9 @@ core::array<IImage*> CNullDriver::createImagesFromFile(io::IReadFile* file, E_TE
 		{
 			// dito
 			file->seek(0);
-			if (SurfaceLoader[i]->isALoadableFileFormat(file))
+			if (SurfaceLoader[i]->isALoadableFileFormat(file)
+				&& !SurfaceLoader[i]->isALoadableFileExtension(file->getFileName())	// extension was tried above already
+				)
 			{
 				file->seek(0);
 				imageArray = SurfaceLoader[i]->loadImages(file, type);
@@ -1683,11 +1673,6 @@ IImage* CNullDriver::createImage(ECOLOR_FORMAT format, const core::dimension2d<u
 IImage* CNullDriver::createImage(ECOLOR_FORMAT format, IImage *imageToCopy)
 {
 	os::Printer::log("Deprecated method, please create an empty image instead and use copyTo().", ELL_WARNING);
-	if(IImage::isRenderTargetOnlyFormat(format))
-	{
-		os::Printer::log("Could not create IImage, format only supported for render target textures.", ELL_WARNING);
-		return 0;
-	}
 
 	CImage* tmp = new CImage(format, imageToCopy->getDimension());
 	imageToCopy->copyTo(tmp);
@@ -1713,7 +1698,7 @@ IImage* CNullDriver::createImage(ITexture* texture, const core::position2d<s32>&
 		void * data = texture->lock(ETLM_READ_ONLY);
 		if ( !data)
 			return 0;
-		IImage* image = new CImage(texture->getColorFormat(), size, data, false, false);
+		IImage* image = new CImage(texture->getColorFormat(), size, data, false);
 		texture->unlock();
 		return image;
 	}
@@ -1830,7 +1815,7 @@ void CNullDriver::updateAllHardwareBuffers()
 		SHWBufferLink *Link=Iterator.getNode()->getValue();
 
 		Link->LastUsed++;
-		if (Link->LastUsed>20000)
+		if (Link->LastUsed>20000 || Link->MeshBuffer->getReferenceCount() == 1)
 		{
 			deleteHardwareBuffer(Link);
 
@@ -1957,7 +1942,7 @@ void CNullDriver::runOcclusionQuery(scene::ISceneNode* node, bool visible)
 		mat.AntiAliasing=0;
 		mat.ColorMask=ECP_NONE;
 		mat.GouraudShading=false;
-		mat.ZWriteEnable=false;
+		mat.ZWriteEnable=EZW_OFF;
 		setMaterial(mat);
 	}
 	setTransform(video::ETS_WORLD, node->getAbsoluteTransformation());
@@ -2010,7 +1995,7 @@ void CNullDriver::updateAllOcclusionQueries(bool block)
 /** Return value is the number of visible pixels/fragments.
 The value is a safe approximation, i.e. can be larger then the
 actual value of pixels. */
-u32 CNullDriver::getOcclusionQueryResult(scene::ISceneNode* node) const
+u32 CNullDriver::getOcclusionQueryResult(const scene::ISceneNode* node) const
 {
 	return ~0;
 }
@@ -2104,10 +2089,10 @@ s32 CNullDriver::addMaterialRenderer(IMaterialRenderer* renderer, const char* na
 
 
 //! Sets the name of a material renderer.
-void CNullDriver::setMaterialRendererName(s32 idx, const char* name)
+void CNullDriver::setMaterialRendererName(u32 idx, const char* name)
 {
-	if (idx < s32(sizeof(sBuiltInMaterialTypeNames) / sizeof(char*))-1 ||
-		idx >= (s32)MaterialRenderers.size())
+	if (idx < (sizeof(sBuiltInMaterialTypeNames) / sizeof(char*))-1 ||
+		idx >= MaterialRenderers.size())
 		return;
 
 	MaterialRenderers[idx].Name = name;
@@ -2162,7 +2147,7 @@ io::IAttributes* CNullDriver::createAttributesFromMaterial(const video::SMateria
 	attr->addBool("PointCloud", material.PointCloud);
 	attr->addBool("GouraudShading", material.GouraudShading);
 	attr->addBool("Lighting", material.Lighting);
-	attr->addBool("ZWriteEnable", material.ZWriteEnable);
+	attr->addEnum("ZWriteEnable", (irr::s32)material.ZWriteEnable, video::ZWriteNames);
 	attr->addInt("ZBuffer", material.ZBuffer);
 	attr->addBool("BackfaceCulling", material.BackfaceCulling);
 	attr->addBool("FrontfaceCulling", material.FrontfaceCulling);
@@ -2178,7 +2163,6 @@ io::IAttributes* CNullDriver::createAttributesFromMaterial(const video::SMateria
 	attr->addEnum("PolygonOffsetDirection", material.PolygonOffsetDirection, video::PolygonOffsetDirectionNames);
 	attr->addFloat("PolygonOffsetDepthBias", material.PolygonOffsetDepthBias);
 	attr->addFloat("PolygonOffsetSlopeScale", material.PolygonOffsetSlopeScale);
-	attr->addInt("ZWriteFineControl", material.ZWriteFineControl);
 
 	// TODO: Would be nice to have a flag that only serializes rest of texture data when a texture pointer exists.
 	prefix = "BilinearFilter";
@@ -2241,7 +2225,13 @@ void CNullDriver::fillMaterialStructureFromAttributes(video::SMaterial& outMater
 	outMaterial.PointCloud = attr->getAttributeAsBool("PointCloud", outMaterial.PointCloud);
 	outMaterial.GouraudShading = attr->getAttributeAsBool("GouraudShading", outMaterial.GouraudShading);
 	outMaterial.Lighting = attr->getAttributeAsBool("Lighting", outMaterial.Lighting);
-	outMaterial.ZWriteEnable = attr->getAttributeAsBool("ZWriteEnable", outMaterial.ZWriteEnable);
+
+	io::E_ATTRIBUTE_TYPE attType = attr->getAttributeType("ZWriteEnable");
+	if (attType == io::EAT_BOOL )	// Before Irrlicht 1.9
+		outMaterial.ZWriteEnable = attr->getAttributeAsBool("ZWriteEnable", outMaterial.ZWriteEnable != video::EZW_OFF ) ? video::EZW_AUTO : video::EZW_OFF;
+	else if (attType == io::EAT_ENUM )
+		outMaterial.ZWriteEnable = (video::E_ZWRITE)attr->getAttributeAsEnumeration("ZWriteEnable", video::ZWriteNames, outMaterial.ZWriteEnable);
+
 	outMaterial.ZBuffer = (u8)attr->getAttributeAsInt("ZBuffer", outMaterial.ZBuffer);
 	outMaterial.BackfaceCulling = attr->getAttributeAsBool("BackfaceCulling", outMaterial.BackfaceCulling);
 	outMaterial.FrontfaceCulling = attr->getAttributeAsBool("FrontfaceCulling", outMaterial.FrontfaceCulling);
@@ -2258,7 +2248,7 @@ void CNullDriver::fillMaterialStructureFromAttributes(video::SMaterial& outMater
 	outMaterial.PolygonOffsetDirection = (video::E_POLYGON_OFFSET)attr->getAttributeAsEnumeration("PolygonOffsetDirection", video::PolygonOffsetDirectionNames, outMaterial.PolygonOffsetDirection);
 	outMaterial.PolygonOffsetDepthBias = attr->getAttributeAsFloat("PolygonOffsetDepthBias", outMaterial.PolygonOffsetDepthBias);
 	outMaterial.PolygonOffsetSlopeScale = attr->getAttributeAsFloat("PolygonOffsetSlopeScale", outMaterial.PolygonOffsetSlopeScale);
-	outMaterial.ZWriteFineControl = (video::E_ZWRITE_FINE_CONTROL)attr->getAttributeAsInt("ZWriteFineControl", outMaterial.ZWriteFineControl);
+
 	prefix = "BilinearFilter";
 	if (attr->existsAttribute(prefix.c_str())) // legacy
 		outMaterial.setFlag(EMF_BILINEAR_FILTER, attr->getAttributeAsBool(prefix.c_str()));
@@ -2333,7 +2323,7 @@ void CNullDriver::deleteMaterialRenders()
 
 
 //! Returns pointer to material renderer or null
-IMaterialRenderer* CNullDriver::getMaterialRenderer(u32 idx)
+IMaterialRenderer* CNullDriver::getMaterialRenderer(u32 idx) const
 {
 	if ( idx < MaterialRenderers.size() )
 		return MaterialRenderers[idx].Renderer;
@@ -2755,6 +2745,24 @@ void CNullDriver::enableMaterial2D(bool enable)
 core::dimension2du CNullDriver::getMaxTextureSize() const
 {
 	return core::dimension2du(0x10000,0x10000); // maybe large enough
+}
+
+bool CNullDriver::needsTransparentRenderPass(const irr::video::SMaterial& material) const
+{
+	// TODO: I suspect it would be nice if the material had an enum for further control.
+	//		Especially it probably makes sense to allow disabling transparent render pass as soon as material.ZWriteEnable is on.
+	//      But then we might want an enum for the renderpass in material instead of just a transparency flag in material - and that's more work.
+	//      Or we could at least set return false when material.ZWriteEnable is EZW_ON? Still considering that...
+	//		Be careful - this function is deeply connected to getWriteZBuffer as transparent render passes are usually about rendering with
+	//      zwrite disabled and getWriteZBuffer calls this function.
+
+	video::IMaterialRenderer* rnd = getMaterialRenderer(material.MaterialType);
+	// TODO: I suspect IMaterialRenderer::isTransparent also often could use SMaterial as parameter
+	//       We could for example then get rid of IsTransparent function in SMaterial and move that to the software material renderer.
+	if (rnd && rnd->isTransparent())
+		return true;
+
+	return false;
 }
 
 

@@ -2,8 +2,8 @@
 // This file is part of the "Irrlicht Engine".
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
-#ifndef __I_OCTREE_SCENE_NODE_H_INCLUDED__
-#define __I_OCTREE_SCENE_NODE_H_INCLUDED__
+#ifndef IRR_I_OCTREE_SCENE_NODE_H_INCLUDED
+#define IRR_I_OCTREE_SCENE_NODE_H_INCLUDED
 
 #include "IMeshSceneNode.h"
 
@@ -63,12 +63,9 @@ public:
 			const core::vector3df& scale = core::vector3df(1,1,1))
 		: IMeshSceneNode(parent, mgr, id, position, rotation, scale) {}
 
-	//! Set if/how vertex buffer object are used for the meshbuffers
-	/** NOTE: When there is already a mesh in the node this will rebuild
-	the octree. */
-	virtual void setUseVBO(EOCTREENODE_VBO useVBO) = 0;
-
 	//! Get if/how vertex buffer object are used for the meshbuffers
+	// NOTE: Will currently _always_ return EOV_NO_VBO.
+	// Octree's with VBO's don't work yet correctly.
 	virtual EOCTREENODE_VBO getUseVBO() const = 0;
 
 	//! Set the kind of tests polygons do for visibility against the camera
@@ -81,6 +78,4 @@ public:
 } // end namespace scene
 } // end namespace irr
 
-
 #endif
-

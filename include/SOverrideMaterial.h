@@ -2,8 +2,8 @@
 // This file is part of the "Irrlicht Engine".
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
-#ifndef __S_OVERRIDE_MATERIAL_H_INCLUDED__
-#define __S_OVERRIDE_MATERIAL_H_INCLUDED__
+#ifndef S_OVERRIDE_MATERIAL_H_INCLUDED
+#define S_OVERRIDE_MATERIAL_H_INCLUDED
 
 #include "SMaterial.h"
 
@@ -35,8 +35,11 @@ namespace video
 		u16 EnablePasses;
 
 		//! Global enable flag, overwritten by the SceneManager in each pass
-		/** The Scenemanager uses the EnablePass array and sets Enabled to
-		true if the Override material is enabled in the current pass. */
+		/** NOTE: This is generally _not_ set by users of the engine, but the 
+		Scenemanager uses the EnablePass array and sets Enabled to true if the 
+		Override material is enabled in the current pass.
+		As user you generally _only_ set EnablePasses. 
+		The exception is when rendering without SceneManager but using draw calls in the VideoDriver. */
 		bool Enabled;
 
 		struct SMaterialTypeReplacement
@@ -175,5 +178,4 @@ namespace video
 } // end namespace video
 } // end namespace irr
 
-#endif // __S_OVERRIDE_MATERIAL_H_INCLUDED__
-
+#endif // S_OVERRIDE_MATERIAL_H_INCLUDED

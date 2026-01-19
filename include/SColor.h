@@ -2,8 +2,8 @@
 // This file is part of the "Irrlicht Engine".
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
-#ifndef __COLOR_H_INCLUDED__
-#define __COLOR_H_INCLUDED__
+#ifndef IRR_S_COLOR_H_INCLUDED
+#define IRR_S_COLOR_H_INCLUDED
 
 #include "irrTypes.h"
 #include "irrMath.h"
@@ -29,6 +29,8 @@ namespace video
 		ECF_R5G6B5,
 
 		//! 24 bit color, no alpha channel, but 8 bit for red, green and blue.
+		//! Warning: 24 bit formats tend to be badly supported. Depending on driver it's usually converted to another
+		//           format or even not working at all. It's mostly better to use 16-bit or 32-bit formats.
 		ECF_R8G8B8,
 
 		//! Default 32 bit color format. 8 bits are used for every component: red, green, blue and alpha.
@@ -493,17 +495,17 @@ namespace video
 			switch (format)
 			{
 				case ECF_A1R5G5B5:
-					color = A1R5G5B5toA8R8G8B8(*(u16*)data);
+					color = A1R5G5B5toA8R8G8B8(*(const u16*)data);
 					break;
 				case ECF_R5G6B5:
-					color = R5G6B5toA8R8G8B8(*(u16*)data);
+					color = R5G6B5toA8R8G8B8(*(const u16*)data);
 					break;
 				case ECF_A8R8G8B8:
-					color = *(u32*)data;
+					color = *(const u32*)data;
 					break;
 				case ECF_R8G8B8:
 					{
-						const u8* p = (u8*)data;
+						const u8* p = (const u8*)data;
 						set(255, p[0],p[1],p[2]);
 					}
 					break;
@@ -668,6 +670,7 @@ namespace video
 			case 1: g = value; break;
 			case 2: b = value; break;
 			case 3: a = value; break;
+			default: break;
 			}
 		}
 

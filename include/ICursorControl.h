@@ -2,8 +2,8 @@
 // This file is part of the "Irrlicht Engine".
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
-#ifndef __I_CURSOR_CONTROL_H_INCLUDED__
-#define __I_CURSOR_CONTROL_H_INCLUDED__
+#ifndef IRR_I_CURSOR_CONTROL_H_INCLUDED
+#define IRR_I_CURSOR_CONTROL_H_INCLUDED
 
 #include "IReferenceCounted.h"
 #include "position2d.h"
@@ -26,7 +26,7 @@ namespace gui
 		ECI_HELP,	// Arrow and question mark
 		ECI_IBEAM,	// typical text-selection cursor
 		ECI_NO,		// should not click icon
-		ECI_WAIT,	// hourclass
+		ECI_WAIT,	// hourglass
 		ECI_SIZEALL,	// arrow in all directions
 		ECI_SIZENESW,	// resizes in direction north-east or south-west
 		ECI_SIZENWSE,	// resizes in direction north-west or south-east
@@ -104,7 +104,7 @@ namespace gui
 		virtual void setVisible(bool visible) = 0;
 
 		//! Returns if the cursor is currently visible.
-		/** \return True if the cursor is visible, false if not. */
+		/** \return True if the cursor flag is set to visible, false if not. */
 		virtual bool isVisible() const = 0;
 
 		//! Sets the new position of the cursor.
@@ -134,16 +134,23 @@ namespace gui
 		virtual void setPosition(s32 x, s32 y) = 0;
 
 		//! Returns the current position of the mouse cursor.
-		/** \return Returns the current position of the cursor. The returned position
+		/** \param updateCursor When true ask system/OS for current cursor position. 
+			When false return the last known (buffered) position ( this is useful to 
+			check what has become of a setPosition call with float numbers).
+		\return Returns the current position of the cursor. The returned position
 		is the position of the mouse cursor in pixel units. */
-		virtual const core::position2d<s32>& getPosition() = 0;
+		virtual const core::position2d<s32>& getPosition(bool updateCursor=true) = 0;
 
 		//! Returns the current position of the mouse cursor.
-		/** \return Returns the current position of the cursor. The returned position
+		/** \param updateCursor When true ask system/OS for current cursor position. 
+			When false return the last known (buffered) position (this is 
+			useful to check what has become of a setPosition call with float numbers
+			and is often different from the values you passed in setPosition).
+		\return Returns the current position of the cursor. The returned position
 		is a value between (0.0f, 0.0f) and (1.0f, 1.0f), where (0.0f, 0.0f) is
 		the top left corner and (1.0f, 1.0f) is the bottom right corner of the
 		render window. */
-		virtual core::position2d<f32> getRelativePosition() = 0;
+		virtual core::position2d<f32> getRelativePosition(bool updateCursor=true) = 0;
 
 		//! Sets an absolute reference rect for setting and retrieving the cursor position.
 		/** If this rect is set, the cursor position is not being calculated relative to
@@ -153,6 +160,12 @@ namespace gui
 		\param rect: A pointer to an reference rectangle or 0 to disable the reference rectangle.*/
 		virtual void setReferenceRect(core::rect<s32>* rect=0) = 0;
 
+		//! Returns the current absolute reference rect used for the cursor position
+		/** \param rect Will receive the reference rectangle when the function returns true
+			When the result is false drivers can still write some platform specific values in there.
+			Generally at least the width/height of the returned rect will correspond to the current window size.
+		\return Return true when a reference rectangle has been set and is used by this driver */
+		virtual bool getReferenceRect(core::rect<s32>& rect) { return false; }
 
 		//! Sets the active cursor icon
 		/** Setting cursor icons is so far only supported on Win32 and Linux */
@@ -189,4 +202,3 @@ namespace gui
 } // end namespace irr
 
 #endif
-

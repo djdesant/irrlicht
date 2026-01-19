@@ -13,7 +13,6 @@
 #include "SViewFrustum.h"
 #include "IMeshManipulator.h"
 #include "SMesh.h"
-#include "IMaterialRenderer.h"
 #ifdef _IRR_COMPILE_WITH_SHADOW_VOLUME_SCENENODE_
 #include "CShadowVolumeSceneNode.h"
 #else
@@ -368,13 +367,14 @@ void CQuake3ShaderSceneNode::render()
 		material.setTexture(0, tex );
 		material.ZBuffer = getDepthFunction( group->get( "depthfunc" ) );
 
+		// TODO: maybe should be video::EZW_ON instead of EZW_AUTO now (we didn't have that before and I just kept old values here when introducing it to not break anything)
 		if ( group->isDefined( "depthwrite" ) )
 		{
-			material.ZWriteEnable = true;
+			material.ZWriteEnable = video::EZW_AUTO;
 		}
 		else
 		{
-			material.ZWriteEnable = drawCount == 0;
+			material.ZWriteEnable = drawCount == 0 ? video::EZW_AUTO : video::EZW_OFF;
 		}
 
 		//resolve quake3 blendfunction to irrlicht Material Type
@@ -477,7 +477,7 @@ void CQuake3ShaderSceneNode::render()
 			for ( u32 a = 0; a != mesh->getMeshBufferCount(); ++a )
 				driver->drawMeshBuffer ( mesh->getMeshBuffer ( a ) );
 
-			v = (const video::S3DVertex*) ( (u8*) v + vSize );
+			v = (const video::S3DVertex*) ( (const u8*) v + vSize );
 		}
 		driver->setTransform(video::ETS_WORLD, AbsoluteTransformation);
 	}

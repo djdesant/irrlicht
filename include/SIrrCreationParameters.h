@@ -2,8 +2,8 @@
 // This file is part of the "Irrlicht Engine".
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
-#ifndef __I_IRRLICHT_CREATION_PARAMETERS_H_INCLUDED__
-#define __I_IRRLICHT_CREATION_PARAMETERS_H_INCLUDED__
+#ifndef IRR_IRRLICHT_CREATION_PARAMETERS_H_INCLUDED
+#define IRR_IRRLICHT_CREATION_PARAMETERS_H_INCLUDED
 
 #include "EDriverTypes.h"
 #include "EDeviceTypes.h"
@@ -28,6 +28,7 @@ namespace irr
 			Bits(32),
 			ZBufferBits(24),
 			Fullscreen(false),
+			WindowResizable(2),
 			Stencilbuffer(true),
 			Vsync(false),
 			AntiAlias(0),
@@ -64,6 +65,7 @@ namespace irr
 			Bits = other.Bits;
 			ZBufferBits = other.ZBufferBits;
 			Fullscreen = other.Fullscreen;
+			WindowResizable = other.WindowResizable;
 			Stencilbuffer = other.Stencilbuffer;
 			Vsync = other.Vsync;
 			AntiAlias = other.AntiAlias;
@@ -76,8 +78,8 @@ namespace irr
 			EventReceiver = other.EventReceiver;
 			WindowId = other.WindowId;
 			LoggingLevel = other.LoggingLevel;
-			DriverMultithreaded = other.DriverMultithreaded;
 			DisplayAdapter = other.DisplayAdapter;
+			DriverMultithreaded = other.DriverMultithreaded;
 			UsePerformanceTimer = other.UsePerformanceTimer;
 			return *this;
 		}
@@ -116,6 +118,12 @@ namespace irr
 		//! Should be set to true if the device should run in fullscreen.
 		/** Otherwise the device runs in windowed mode. Default: false. */
 		bool Fullscreen;
+
+		//! Should a non-fullscreen window be resizable.
+		/** Might not be supported by all devices. Ignored when Fullscreen is true.
+		Values: 0 = not resizable, 1 = resizable, 2 = system decides default itself
+		Default: 2*/
+		u8 WindowResizable;
 
 		//! Specifies if the stencil buffer should be enabled.
 		/** Set this to true, if you want the engine be able to draw
@@ -298,4 +306,3 @@ namespace irr
 } // end namespace irr
 
 #endif
-

@@ -44,6 +44,26 @@ void CDemo::run()
 	{
 		resolution.Width = 640;
 		resolution.Height = 480;
+		aa = 0; // seems to cause troubles (at least on X11).
+	}
+
+	// Try to use desktop resolution for full-screen
+	// Irrlicht still does full-screen by switching monitor modes.
+	// That's not really a good idea anymore these days (messes with user desktop and
+	// on many WindowManager + X11 combinations on Linux it fails by now).
+	// Using desktop resolution at least has a higher chance of still working.
+	if ( fullscreen )
+	{
+		IrrlichtDevice* nullDevice = createDevice(irr::video::EDT_NULL);
+		if ( nullDevice )
+		{
+			video::IVideoModeList * videoModes = nullDevice->getVideoModeList ();
+			if ( videoModes )
+			{
+				resolution = videoModes->getDesktopResolution();
+			}
+			nullDevice->drop();
+		}
 	}
 
 	irr::SIrrlichtCreationParameters params;
@@ -424,10 +444,13 @@ void CDemo::loadSceneData()
 			model1->setPosition(core::vector3df(100,40,-80));
 			model1->setScale(core::vector3df(2,2,2));
 			model1->setMD2Animation(scene::EMAT_STAND);
-			model1->setMaterialFlag(video::EMF_LIGHTING, false);
+			model1->setMaterialFlag(video::EMF_LIGHTING, true);
+			model1->getMaterial(0).Shininess = 40.f;
 			model1->setMaterialFlag(video::EMF_NORMALIZE_NORMALS, true);
 			model1->setMaterialType(video::EMT_SPHERE_MAP);
-			model1->addShadowVolumeSceneNode();
+			model1->setAutomaticCulling(scene::EAC_OFF); // avoid shadows not updating
+			scene::IShadowVolumeSceneNode * shadVol = model1->addShadowVolumeSceneNode();
+			if(shadVol) shadVol->setOptimization(scene::ESV_NONE);	// Sydney has broken shadows otherwise
 		}
 
 		model2 = sm->addAnimatedMeshSceneNode(mesh);
@@ -439,7 +462,9 @@ void CDemo::loadSceneData()
 			model2->setMaterialTexture(0, device->getVideoDriver()->getTexture(mediaPath + "sydney.bmp"));
 			model2->setMaterialFlag(video::EMF_LIGHTING, true);
 			model2->setMaterialFlag(video::EMF_NORMALIZE_NORMALS, true);
-			model2->addShadowVolumeSceneNode();
+			model2->setAutomaticCulling(scene::EAC_OFF); // avoid shadows not updating
+			scene::IShadowVolumeSceneNode * shadVol = model2->addShadowVolumeSceneNode();
+			if (shadVol) shadVol->setOptimization(scene::ESV_NONE);	// Sydney has broken shadows otherwise
 		}
 	}
 
@@ -493,6 +518,7 @@ void CDemo::loadSceneData()
 		bill = sm->addBillboardSceneNode(0, core::dimension2d<f32>(100,100),
 			waypoint[r]+ core::vector3df(0,20,0));
 		bill->setMaterialFlag(video::EMF_LIGHTING, false);
+		bill->setMaterialFlag(video::EMF_ZWRITE_ENABLE, false);
 		bill->setMaterialTexture(0, driver->getTexture(mediaPath + "portal1.bmp"));
 		bill->setMaterialType(video::EMT_TRANSPARENT_ADD_COLOR);
 		bill->addAnimator(anim);
@@ -579,7 +605,7 @@ void CDemo::createLoadingScreen()
 	const io::path mediaPath = getExampleMediaPath();
 
 	// irrlicht logo
-	device->getGUIEnvironment()->addImage(device->getVideoDriver()->getTexture(mediaPath + "irrlichtlogo2.png"),
+	device->getGUIEnvironment()->addImage(device->getVideoDriver()->getTexture(mediaPath + "irrlichtlogo3.png"),
 		core::position2d<s32>(5,5));
 
 	// loading text
@@ -644,8 +670,8 @@ void CDemo::shoot()
 	else
 	{
 		// doesnt collide with wall
-		core::vector3df start = camera->getPosition();
-		core::vector3df end = (camera->getTarget() - start);
+		start = camera->getPosition();
+		end = (camera->getTarget() - start);
 		end.normalize();
 		start += end*8.0f;
 		end = start + (end * camera->getFarValue());
@@ -798,7 +824,7 @@ void CDemo::startSound()
 
 	SDL_Init(SDL_INIT_AUDIO);
 
-	if (Mix_OpenAudio(22050, AUDIO_S16, 2, 128))
+	if (Mix_OpenAudio(44100, AUDIO_S16SYS, 2, 4096))
 		return;
 
 	const io::path mediaPath = getExampleMediaPath();
@@ -807,8 +833,8 @@ void CDemo::startSound()
 	if (stream)
 		Mix_PlayMusic(stream, -1);
 
-	ballSound = Mix_LoadWAV(mediaPath + "ball.wav");
-	impactSound = Mix_LoadWAV(mediaPath + "impact.wav");
+	ballSound = Mix_LoadWAV((mediaPath + "ball.wav").c_str());
+	impactSound = Mix_LoadWAV((mediaPath + "impact.wav").c_str());
 }
 
 void CDemo::playSound(Mix_Chunk *sample)

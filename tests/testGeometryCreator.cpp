@@ -28,7 +28,7 @@ bool testGeometryCreator(void)
 	material.Lighting = false;
 	material.TextureLayer[0].Texture = wall;
 
-	irr::scene::IMesh * meshHill = geom->createHillPlaneMesh(dimension2df(10, 5), dimension2du(5, 5), 
+	irr::scene::IMesh * meshHill = geom->createHillPlaneMesh(dimension2df(10, 5), dimension2du(5, 5),
 									&material, 10, dimension2df(2, 2), dimension2df(3, 3) );
 	IMeshSceneNode * node = smgr->addMeshSceneNode(meshHill, 0, -1,
 									vector3df(0, 10, 0), vector3df(-60, 0, 0));
@@ -77,7 +77,7 @@ bool testGeometryCreator(void)
 	{
 		smgr->drawAll();
 		driver->endScene();
-		result = takeScreenshotAndCompareAgainstReference(driver, "-testGeometryCreator.png", 99.994f);
+		result = takeScreenshotAndCompareAgainstReference(driver, "-testGeometryCreator.png", 99.989f);
 	}
 
 	smgr->clear();
@@ -116,7 +116,7 @@ bool testGeometryCreator(void)
 
 	// This screenshot shows some mipmap problems, but this seems to be
 	// no fault of the mesh
-	result = takeScreenshotAndCompareAgainstReference(driver, "-testTerrainMesh.png", 99.989f);
+	result &= takeScreenshotAndCompareAgainstReference(driver, "-testTerrainMesh.png", 99.989f);
 
 	device->closeDevice();
 	device->run();

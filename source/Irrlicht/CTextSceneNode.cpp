@@ -7,7 +7,7 @@
 #include "IVideoDriver.h"
 #include "ICameraSceneNode.h"
 #include "IGUISpriteBank.h"
-#include "SMeshBuffer.h"
+#include "CMeshBuffer.h"
 #include "os.h"
 
 
@@ -134,7 +134,7 @@ CBillboardTextSceneNode::CBillboardTextSceneNode(ISceneNode* parent, ISceneManag
 	Material.BackfaceCulling = false;
 	Material.Lighting = false;
 	Material.ZBuffer = video::ECFN_LESSEQUAL;
-	Material.ZWriteEnable = false;
+	Material.ZWriteEnable = video::EZW_OFF;
 
 	if (font)
 	{
@@ -215,8 +215,18 @@ void CBillboardTextSceneNode::setText(const wchar_t* text)
 		u32 rectno = sprites[spriteno].Frames[0].rectNumber;
 		u32 texno = sprites[spriteno].Frames[0].textureNumber;
 
-		dim[0] = core::reciprocal ( (f32) Font->getSpriteBank()->getTexture(texno)->getSize().Width );
-		dim[1] = core::reciprocal ( (f32) Font->getSpriteBank()->getTexture(texno)->getSize().Height );
+		video::ITexture* texture = Font->getSpriteBank()->getTexture(texno);
+		if (texture)
+		{
+			const core::dimension2d<u32>& texSize = texture->getOriginalSize();
+			dim[0] = core::reciprocal((f32)texSize.Width);
+			dim[1] = core::reciprocal((f32)texSize.Height);
+		}
+		else
+		{
+			dim[0] = 0;
+			dim[1] = 0;
+		}
 
 		const core::rect<s32>& s = sourceRects[rectno];
 
@@ -373,8 +383,11 @@ void CBillboardTextSceneNode::updateMesh(const irr::scene::ICameraSceneNode* cam
 
 void CBillboardTextSceneNode::OnRegisterSceneNode()
 {
-	SceneManager->registerNodeForRendering(this, ESNRP_TRANSPARENT);
-	ISceneNode::OnRegisterSceneNode();
+	if (IsVisible && Font && Mesh)
+	{
+		SceneManager->registerNodeForRendering(this, ESNRP_TRANSPARENT);
+		ISceneNode::OnRegisterSceneNode();
+	}
 }
 
 

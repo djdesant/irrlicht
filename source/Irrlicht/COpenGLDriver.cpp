@@ -35,7 +35,7 @@ const u16 COpenGLDriver::Quad2DIndices[4] = { 0, 1, 2, 3 };
 #if defined(_IRR_COMPILE_WITH_WINDOWS_DEVICE_) || defined(_IRR_COMPILE_WITH_X11_DEVICE_) || defined(_IRR_COMPILE_WITH_OSX_DEVICE_)
 COpenGLDriver::COpenGLDriver(const SIrrlichtCreationParameters& params, io::IFileSystem* io, IContextManager* contextManager)
 	: CNullDriver(io, params.WindowSize), COpenGLExtensionHandler(), CacheHandler(0), CurrentRenderMode(ERM_NONE), ResetRenderStates(true),
-	Transformation3DChanged(true), AntiAlias(params.AntiAlias), ColorFormat(ECF_R8G8B8), FixedPipelineState(EOFPS_ENABLE), Params(params),
+	Transformation3DChanged(true), AntiAlias(params.AntiAlias), ColorFormat(ECF_R8G8B8), ActivePipelineState(EOAP_FIXED), Params(params),
 	ContextManager(contextManager),
 #if defined(_IRR_COMPILE_WITH_WINDOWS_DEVICE_)
 	DeviceType(EIDT_WIN32)
@@ -55,7 +55,7 @@ COpenGLDriver::COpenGLDriver(const SIrrlichtCreationParameters& params, io::IFil
 COpenGLDriver::COpenGLDriver(const SIrrlichtCreationParameters& params, io::IFileSystem* io, CIrrDeviceSDL* device)
 	: CNullDriver(io, params.WindowSize), COpenGLExtensionHandler(), CacheHandler(0),
 	CurrentRenderMode(ERM_NONE), ResetRenderStates(true), Transformation3DChanged(true),
-	AntiAlias(params.AntiAlias), ColorFormat(ECF_R8G8B8), FixedPipelineState(EOFPS_ENABLE),
+	AntiAlias(params.AntiAlias), ColorFormat(ECF_R8G8B8), ActivePipelineState(EOAP_FIXED),
 	Params(params), SDLDevice(device), ContextManager(0), DeviceType(EIDT_SDL)
 {
 #ifdef _DEBUG
@@ -341,7 +341,6 @@ void COpenGLDriver::setTransform(E_TRANSFORMATION_STATE state, const core::matri
 	switch (state)
 	{
 	case ETS_VIEW:
-	case ETS_WORLD:
 		{
 			// OpenGL only has a model matrix, view and world is not existent. so lets fake these two.
 			CacheHandler->setMatrixMode(GL_MODELVIEW);
@@ -349,10 +348,26 @@ void COpenGLDriver::setTransform(E_TRANSFORMATION_STATE state, const core::matri
 			// first load the viewing transformation for user clip planes
 			glLoadMatrixf((Matrices[ETS_VIEW]).pointer());
 
-			// we have to update the clip planes to the latest view matrix
+			// We have to update the clip planes to the latest view matrix.
+			// Reason is that opengl transforms the world-coordinates of the clip planes with the inverse modelview matrix 
+			// and saves them like that.
+			// Note that for shaders this call isn't needed at all and could be removed.
+			// Thought the call seems to be very cheap, so it hardly matters.
 			for (u32 i=0; i<MaxUserClipPlanes; ++i)
 				if (UserClipPlanes[i].Enabled)
 					uploadClipPlane(i);
+
+			// now the real model-view matrix
+			glMultMatrixf(Matrices[ETS_WORLD].pointer());
+		}
+		break;
+	case ETS_WORLD:
+		{
+			// OpenGL only has a model matrix, view and world is not existent. so lets fake these two.
+			CacheHandler->setMatrixMode(GL_MODELVIEW);
+
+			// first load the viewing transformation
+			glLoadMatrixf((Matrices[ETS_VIEW]).pointer());
 
 			// now the real model-view matrix
 			glMultMatrixf(Matrices[ETS_WORLD].pointer());
@@ -786,13 +801,10 @@ void COpenGLDriver::updateOcclusionQuery(scene::ISceneNode* node, bool block)
 /** Return value is the number of visible pixels/fragments.
 The value is a safe approximation, i.e. can be larger than the
 actual value of pixels. */
-u32 COpenGLDriver::getOcclusionQueryResult(scene::ISceneNode* node) const
+u32 COpenGLDriver::getOcclusionQueryResult(const scene::ISceneNode* node) const
 {
-	const s32 index = OcclusionQueries.linear_search(SOccQuery(node));
-	if (index != -1)
-		return OcclusionQueries[index].Result;
-	else
-		return ~0;
+	const s32 index = OcclusionQueries.linear_search(node);
+	return index < 0 ? ~0 : OcclusionQueries[index].Result;
 }
 
 
@@ -806,10 +818,10 @@ IRenderTarget* COpenGLDriver::addRenderTarget()
 }
 
 
-// small helper function to create vertex buffer object adress offsets
-static inline u8* buffer_offset(const long offset)
+// small helper function to create vertex buffer object address offsets
+static inline const GLvoid * buffer_offset(const size_t offset)
 {
-	return ((u8*)0 + offset);
+	return (const GLvoid *)offset;
 }
 
 
@@ -832,10 +844,7 @@ void COpenGLDriver::drawVertexPrimitiveList(const void* vertices, u32 vertexCoun
 	// draw everything
 	setRenderStates3DMode();
 
-	if ((pType!=scene::EPT_POINTS) && (pType!=scene::EPT_POINT_SPRITES))
-		CacheHandler->setClientState(true, true, true, true);
-	else
-		CacheHandler->setClientState(true, false, true, false);
+	CacheHandler->setClientState(true, true, true, true);
 
 //due to missing defines in OSX headers, we have to be more specific with this check
 //#if defined(GL_ARB_vertex_array_bgra) || defined(GL_EXT_vertex_array_bgra)
@@ -864,7 +873,7 @@ void COpenGLDriver::drawVertexPrimitiveList(const void* vertices, u32 vertexCoun
 		else
 		{
 			// avoid passing broken pointer to OpenGL
-			_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+			IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 			glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 		}
 	}
@@ -1086,7 +1095,7 @@ void COpenGLDriver::renderArray(const void* indexList, u32 primitiveCount,
 				glTexEnvf(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE, GL_TRUE);
 			}
 #endif
-			glDrawArrays(GL_POINTS, 0, primitiveCount);
+			glDrawElements(GL_POINTS, primitiveCount, indexSize, indexList);
 #ifdef GL_ARB_point_sprite
 			if (pType==scene::EPT_POINT_SPRITES && FeatureAvailable[IRR_ARB_point_sprite])
 			{
@@ -1191,7 +1200,7 @@ void COpenGLDriver::draw2DVertexPrimitiveList(const void* vertices, u32 vertexCo
 		else
 		{
 			// avoid passing broken pointer to OpenGL
-			_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+			IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 			glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 		}
 	}
@@ -1349,7 +1358,7 @@ void COpenGLDriver::draw2DImage(const video::ITexture* texture, const core::posi
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size() == 0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size() == 0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -1433,7 +1442,7 @@ void COpenGLDriver::draw2DImage(const video::ITexture* texture, const core::rect
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size() == 0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size() == 0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -1444,7 +1453,7 @@ void COpenGLDriver::draw2DImage(const video::ITexture* texture, const core::rect
 }
 
 
-void COpenGLDriver::draw2DImage(const video::ITexture* texture, u32 layer, bool flip)
+void COpenGLDriver::draw2DImageQuad(const video::ITexture* texture, u32 layer, bool flip)
 {
 	if (!texture || !CacheHandler->getTextureCache().set(0, texture))
 		return;
@@ -1597,7 +1606,7 @@ void COpenGLDriver::draw2DImageBatch(const video::ITexture* texture,
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -1768,7 +1777,7 @@ void COpenGLDriver::draw2DImageBatch(const video::ITexture* texture,
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -1873,7 +1882,7 @@ void COpenGLDriver::draw2DRectangle(const core::rect<s32>& position,
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -1916,7 +1925,7 @@ void COpenGLDriver::draw2DLine(const core::position2d<s32>& start,
 			glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 		else
 		{
-			_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+			IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 			glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 		}
 
@@ -1954,7 +1963,7 @@ void COpenGLDriver::drawPixel(u32 x, u32 y, const SColor &color)
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -2081,7 +2090,7 @@ bool COpenGLDriver::testGLError(int code)
 		os::Printer::log("GL_INVALID_FRAMEBUFFER_OPERATION", core::stringc(code).c_str(), ELL_ERROR); break;
 #endif
 	};
-//	_IRR_DEBUG_BREAK_IF(true);
+//	IRR_DEBUG_BREAK_IF(true);
 	return true;
 #else
 	return false;
@@ -2246,14 +2255,15 @@ GLint COpenGLDriver::getTextureWrapMode(const u8 clamp)
 void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMaterial& lastmaterial,
 	bool resetAllRenderStates)
 {
-	// Fixed pipeline isn't important for shader based materials
+	// Switch between shader and fixed pipeline
+	// Pure fixed pipeline settings are disabled for shader materials
 
-	E_OPENGL_FIXED_PIPELINE_STATE tempState = FixedPipelineState;
+	E_OPENGL_ACTIVE_PIPELINE tempState = ActivePipelineState;
 
-	if (resetAllRenderStates || tempState == EOFPS_ENABLE || tempState == EOFPS_DISABLE_TO_ENABLE)
+	if (tempState == EOAP_FIXED || tempState == EOAP_SHADER_TO_FIXED)	// fixed function pipeline only
 	{
 		// material colors
-		if (resetAllRenderStates || tempState == EOFPS_DISABLE_TO_ENABLE ||
+		if (resetAllRenderStates || tempState == EOAP_SHADER_TO_FIXED ||
 			lastmaterial.ColorMaterial != material.ColorMaterial)
 		{
 			switch (material.ColorMaterial)
@@ -2281,7 +2291,7 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 				glEnable(GL_COLOR_MATERIAL);
 		}
 
-		if (resetAllRenderStates || tempState == EOFPS_DISABLE_TO_ENABLE ||
+		if (resetAllRenderStates || tempState == EOAP_SHADER_TO_FIXED ||
 			lastmaterial.AmbientColor != material.AmbientColor ||
 			lastmaterial.DiffuseColor != material.DiffuseColor ||
 			lastmaterial.EmissiveColor != material.EmissiveColor ||
@@ -2321,7 +2331,7 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 			}
 		}
 
-		if (resetAllRenderStates || tempState == EOFPS_DISABLE_TO_ENABLE ||
+		if (resetAllRenderStates || tempState == EOAP_SHADER_TO_FIXED ||
 			lastmaterial.SpecularColor != material.SpecularColor ||
 			lastmaterial.Shininess != material.Shininess ||
 			lastmaterial.ColorMaterial != material.ColorMaterial)
@@ -2351,7 +2361,7 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 		}
 
 		// shademode
-		if (resetAllRenderStates || tempState == EOFPS_DISABLE_TO_ENABLE ||
+		if (resetAllRenderStates || tempState == EOAP_SHADER_TO_FIXED ||
 			lastmaterial.GouraudShading != material.GouraudShading)
 		{
 			if (material.GouraudShading)
@@ -2361,7 +2371,7 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 		}
 
 		// lighting
-		if (resetAllRenderStates || tempState == EOFPS_DISABLE_TO_ENABLE ||
+		if (resetAllRenderStates || tempState == EOAP_SHADER_TO_FIXED ||
 			lastmaterial.Lighting != material.Lighting)
 		{
 			if (material.Lighting)
@@ -2371,7 +2381,7 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 		}
 
 		// fog
-		if (resetAllRenderStates || tempState == EOFPS_DISABLE_TO_ENABLE ||
+		if (resetAllRenderStates || tempState == EOAP_SHADER_TO_FIXED ||
 			lastmaterial.FogEnable != material.FogEnable)
 		{
 			if (material.FogEnable)
@@ -2381,7 +2391,7 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 		}
 
 		// normalization
-		if (resetAllRenderStates || tempState == EOFPS_DISABLE_TO_ENABLE ||
+		if (resetAllRenderStates || tempState == EOAP_SHADER_TO_FIXED ||
 			lastmaterial.NormalizeNormals != material.NormalizeNormals)
 		{
 			if (material.NormalizeNormals)
@@ -2391,9 +2401,9 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 		}
 
 		// Set fixed pipeline as active.
-		tempState = EOFPS_ENABLE;
+		tempState = EOAP_FIXED;
 	}
-	else if (tempState == EOFPS_ENABLE_TO_DISABLE)
+	else if ((resetAllRenderStates && tempState == EOAP_SHADER) || tempState == EOAP_FIXED_TO_SHADER)	// shader pipeline only
 	{
 		glDisable(GL_COLOR_MATERIAL);
 		glDisable(GL_LIGHTING);
@@ -2401,10 +2411,11 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 		glDisable(GL_NORMALIZE);
 
 		// Set programmable pipeline as active.
-		tempState = EOFPS_DISABLE;
+		tempState = EOAP_SHADER;
 	}
 
-	// tempState == EOFPS_DISABLE - driver doesn't calls functions related to fixed pipeline.
+	// Switching or resetting pipeline done.
+	// tempState now either EOAP_SHADER or EOAP_FIXED. Stuff below affects fixed and shader pipeline.
 
 	// fillmode - fixed pipeline call, but it emulate GL_LINES behaviour in rendering, so it stay here.
 	if (resetAllRenderStates || (lastmaterial.Wireframe != material.Wireframe) || (lastmaterial.PointCloud != material.PointCloud))
@@ -2585,7 +2596,9 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 	}
 
     // Blend Factor
-	if (IR(material.BlendFactor) & 0xFFFFFFFF)
+	if (IR(material.BlendFactor) & 0xFFFFFFFF	// TODO: why the & 0xFFFFFFFF?
+		&& material.MaterialType != EMT_ONETEXTURE_BLEND
+		)
 	{
         E_BLEND_FACTOR srcRGBFact = EBF_ZERO;
         E_BLEND_FACTOR dstRGBFact = EBF_ZERO;
@@ -2700,7 +2713,7 @@ void COpenGLDriver::setBasicRenderStates(const SMaterial& material, const SMater
 	setTextureRenderStates(material, resetAllRenderStates);
 
 	// set current fixed pipeline state
-	FixedPipelineState = tempState;
+	ActivePipelineState = tempState;
 }
 
 //! Compare in SMaterial doesn't check texture parameters, so we should call this on each OnRender call.
@@ -2712,7 +2725,7 @@ void COpenGLDriver::setTextureRenderStates(const SMaterial& material, bool reset
 	{
 		bool fixedPipeline = false;
 
-		if (FixedPipelineState == EOFPS_ENABLE || FixedPipelineState == EOFPS_DISABLE_TO_ENABLE)
+		if (ActivePipelineState == EOAP_FIXED || ActivePipelineState == EOAP_SHADER_TO_FIXED)
 			fixedPipeline = true;
 
 		const COpenGLTexture* tmpTexture = CacheHandler->getTextureCache().get(i);
@@ -2748,7 +2761,7 @@ void COpenGLDriver::setTextureRenderStates(const SMaterial& material, bool reset
 				statesCache.IsCached = false;
 
 #ifdef GL_VERSION_2_1
-			if (Version >= 210)
+			if (Version >= 201)
 			{
 				if (!statesCache.IsCached || material.TextureLayer[i].LODBias != statesCache.LODBias)
 				{
@@ -2873,10 +2886,10 @@ void COpenGLDriver::enableMaterial2D(bool enable)
 void COpenGLDriver::setRenderStates2DMode(bool alpha, bool texture, bool alphaChannel)
 {
 	// 2d methods uses fixed pipeline
-	if (FixedPipelineState == COpenGLDriver::EOFPS_DISABLE)
-		FixedPipelineState = COpenGLDriver::EOFPS_DISABLE_TO_ENABLE;
+	if (ActivePipelineState == COpenGLDriver::EOAP_SHADER)
+		ActivePipelineState = COpenGLDriver::EOAP_SHADER_TO_FIXED;
 	else
-		FixedPipelineState = COpenGLDriver::EOFPS_ENABLE;
+		ActivePipelineState = COpenGLDriver::EOAP_FIXED;
 
 	bool resetAllRenderStates = false;
 
@@ -3044,7 +3057,7 @@ void COpenGLDriver::deleteAllDynamicLights()
 	for (s32 i=0; i<MaxLights; ++i)
 		glDisable(GL_LIGHT0 + i);
 
-	RequestedLights.clear();
+	RequestedLights.set_used(0);
 
 	CNullDriver::deleteAllDynamicLights();
 }
@@ -3221,11 +3234,14 @@ void COpenGLDriver::setAmbientLight(const SColorf& color)
 
 // this code was sent in by Oliver Klems, thank you! (I modified the glViewport
 // method just a bit.
-void COpenGLDriver::setViewPort(const core::rect<s32>& area)
+void COpenGLDriver::setViewPort(const core::rect<s32>& area, bool clipToRenderTarget)
 {
 	core::rect<s32> vp = area;
-	core::rect<s32> rendert(0, 0, getCurrentRenderTargetSize().Width, getCurrentRenderTargetSize().Height);
-	vp.clipAgainst(rendert);
+	if ( clipToRenderTarget )
+	{
+		core::rect<s32> rendert(0, 0, getCurrentRenderTargetSize().Width, getCurrentRenderTargetSize().Height);
+		vp.clipAgainst(rendert);
+	}
 
 	if (vp.getHeight() > 0 && vp.getWidth() > 0)
 		CacheHandler->setViewport(vp.UpperLeftCorner.X, getCurrentRenderTargetSize().Height - vp.UpperLeftCorner.Y - vp.getHeight(), vp.getWidth(), vp.getHeight());
@@ -3286,6 +3302,11 @@ void COpenGLDriver::drawStencilShadowVolume(const core::array<core::vector3df>& 
 #ifdef GL_NV_depth_clamp
 	if (FeatureAvailable[IRR_NV_depth_clamp])
 		glEnable(GL_DEPTH_CLAMP_NV);
+#elif defined(GL_ARB_depth_clamp)
+	if (FeatureAvailable[IRR_ARB_depth_clamp])
+	{
+		glEnable(GL_DEPTH_CLAMP);
+	}
 #endif
 
 	// The first parts are not correctly working, yet.
@@ -3367,6 +3388,11 @@ void COpenGLDriver::drawStencilShadowVolume(const core::array<core::vector3df>& 
 #ifdef GL_NV_depth_clamp
 	if (FeatureAvailable[IRR_NV_depth_clamp])
 		glDisable(GL_DEPTH_CLAMP_NV);
+#elif defined(GL_ARB_depth_clamp)
+	if (FeatureAvailable[IRR_ARB_depth_clamp])
+	{
+		glDisable(GL_DEPTH_CLAMP);
+	}
 #endif
 
 	glDisable(GL_POLYGON_OFFSET_FILL);
@@ -3435,7 +3461,7 @@ void COpenGLDriver::drawStencilShadow(bool clearStencilBuffer, video::SColor lef
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -3546,7 +3572,7 @@ void COpenGLDriver::draw3DBox( const core::aabbox3d<f32>& box, SColor color )
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(v))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -3582,7 +3608,7 @@ void COpenGLDriver::draw3DLine(const core::vector3df& start,
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, sizeof(S3DVertex), &(static_cast<const S3DVertex*>(Quad2DVertices))[0].Color);
 	else
 	{
-		_IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
+		IRR_DEBUG_BREAK_IF(ColorBuffer.size()==0);
 		glColorPointer(colorSize, GL_UNSIGNED_BYTE, 0, &ColorBuffer[0]);
 	}
 
@@ -3603,8 +3629,13 @@ bool COpenGLDriver::queryTextureFormat(ECOLOR_FORMAT format) const
 	GLint dummyInternalFormat;
 	GLenum dummyPixelFormat;
 	GLenum dummyPixelType;
-	void (*dummyConverter)(const void*, s32, void*);
+	void (*dummyConverter)(const void*, u32, void*);
 	return getColorFormatParameters(format, dummyInternalFormat, dummyPixelFormat, dummyPixelType, &dummyConverter);
+}
+
+bool COpenGLDriver::needsTransparentRenderPass(const irr::video::SMaterial& material) const
+{
+	return CNullDriver::needsTransparentRenderPass(material) || material.isAlphaBlendOperation();
 }
 
 //! Only used by the internal engine. Used to notify the driver that
@@ -3647,19 +3678,15 @@ s32 COpenGLDriver::getPixelShaderConstantID(const c8* name)
 //! Sets a vertex shader constant.
 void COpenGLDriver::setVertexShaderConstant(const f32* data, s32 startRegister, s32 constantAmount)
 {
-#ifdef GL_ARB_vertex_program
 	for (s32 i=0; i<constantAmount; ++i)
 		extGlProgramLocalParameter4fv(GL_VERTEX_PROGRAM_ARB, startRegister+i, &data[i*4]);
-#endif
 }
 
 //! Sets a pixel shader constant.
 void COpenGLDriver::setPixelShaderConstant(const f32* data, s32 startRegister, s32 constantAmount)
 {
-#ifdef GL_ARB_fragment_program
 	for (s32 i=0; i<constantAmount; ++i)
 		extGlProgramLocalParameter4fv(GL_FRAGMENT_PROGRAM_ARB, startRegister+i, &data[i*4]);
-#endif
 }
 
 //! Sets a constant for the vertex shader based on an index.
@@ -3675,6 +3702,12 @@ bool COpenGLDriver::setVertexShaderConstant(s32 index, const s32* ints, int coun
 	return setPixelShaderConstant(index, ints, count);
 }
 
+//! Uint interface for the above.
+bool COpenGLDriver::setVertexShaderConstant(s32 index, const u32* ints, int count)
+{
+	return setPixelShaderConstant(index, ints, count);
+}
+
 //! Sets a constant for the pixel shader based on an index.
 bool COpenGLDriver::setPixelShaderConstant(s32 index, const f32* floats, int count)
 {
@@ -3684,6 +3717,12 @@ bool COpenGLDriver::setPixelShaderConstant(s32 index, const f32* floats, int cou
 
 //! Int interface for the above.
 bool COpenGLDriver::setPixelShaderConstant(s32 index, const s32* ints, int count)
+{
+	os::Printer::log("Error: Please call services->setPixelShaderConstant(), not VideoDriver->setPixelShaderConstant().");
+	return false;
+}
+
+bool COpenGLDriver::setPixelShaderConstant(s32 index, const u32* ints, int count)
 {
 	os::Printer::log("Error: Please call services->setPixelShaderConstant(), not VideoDriver->setPixelShaderConstant().");
 	return false;
@@ -3703,6 +3742,12 @@ s32 COpenGLDriver::addShaderMaterial(const c8* vertexShaderProgram,
 		callback, baseMaterial, userData);
 
 	r->drop();
+
+	if (callback && nr >= 0)
+	{
+		callback->OnCreate(this, userData);
+	}
+
 	return nr;
 }
 
@@ -3729,13 +3774,20 @@ s32 COpenGLDriver::addHighLevelShaderMaterial(
 
 	COpenGLSLMaterialRenderer* r = new COpenGLSLMaterialRenderer(
 			this, nr,
-			vertexShaderProgram, vertexShaderEntryPointName, vsCompileTarget,
-			pixelShaderProgram, pixelShaderEntryPointName, psCompileTarget,
-			geometryShaderProgram, geometryShaderEntryPointName, gsCompileTarget,
+			vertexShaderProgram, 
+			pixelShaderProgram, 
+			geometryShaderProgram,
 			inType, outType, verticesOut,
 			callback,baseMaterial, userData);
 
 	r->drop();
+
+	if (callback && nr >= 0)
+	{
+		r->startUseProgram();
+		callback->OnCreate(r, userData);
+		r->stopUseProgram();
+	}
 
 	return nr;
 }
@@ -3752,6 +3804,9 @@ IVideoDriver* COpenGLDriver::getVideoDriver()
 ITexture* COpenGLDriver::addRenderTargetTexture(const core::dimension2d<u32>& size,
 	const io::path& name, const ECOLOR_FORMAT format)
 {
+	if ( IImage::isCompressedFormat(format) )
+		return 0;
+
 	//disable mip-mapping
 	bool generateMipLevels = getTextureCreationFlag(ETCF_CREATE_MIP_MAPS);
 	setTextureCreationFlag(ETCF_CREATE_MIP_MAPS, false);
@@ -3779,6 +3834,9 @@ ITexture* COpenGLDriver::addRenderTargetTexture(const core::dimension2d<u32>& si
 //! Creates a render target texture for a cubemap
 ITexture* COpenGLDriver::addRenderTargetTextureCubemap(const irr::u32 sideLen, const io::path& name, const ECOLOR_FORMAT format)
 {
+	if ( IImage::isCompressedFormat(format) )
+		return 0;
+
 	//disable mip-mapping
 	bool generateMipLevels = getTextureCreationFlag(ETCF_CREATE_MIP_MAPS);
 	setTextureCreationFlag(ETCF_CREATE_MIP_MAPS, false);
@@ -3937,7 +3995,8 @@ IImage* COpenGLDriver::createScreenShot(video::ECOLOR_FORMAT format, video::E_RE
 	if (format==video::ECF_UNKNOWN)
 		format=getColorFormat();
 
-	if (IImage::isRenderTargetOnlyFormat(format) || IImage::isCompressedFormat(format) || IImage::isDepthFormat(format))
+	// TODO: Maybe we could support more formats (floating point and some of those beyond ECF_R8), didn't really try yet
+	if (IImage::isCompressedFormat(format) || IImage::isDepthFormat(format) || IImage::isFloatingPointFormat(format) || format >= ECF_R8)
 		return 0;
 
 	// allows to read pixels in top-to-bottom order
@@ -4172,8 +4231,10 @@ GLenum COpenGLDriver::getZBufferBits() const
 }
 
 bool COpenGLDriver::getColorFormatParameters(ECOLOR_FORMAT format, GLint& internalFormat, GLenum& pixelFormat,
-	GLenum& pixelType, void(**converter)(const void*, s32, void*)) const
+	GLenum& pixelType, void(**converter)(const void*, u32, void*)) const
 {
+	// NOTE: Converter variable not used here, but don't remove, it's used in the OGL-ES drivers.
+
 	bool supported = false;
 	internalFormat = GL_RGBA;
 	pixelFormat = GL_RGBA;
@@ -4196,7 +4257,7 @@ bool COpenGLDriver::getColorFormatParameters(ECOLOR_FORMAT format, GLint& intern
 	case ECF_R8G8B8:
 		supported = true;
 		internalFormat = GL_RGB;
-		pixelFormat = GL_BGR;
+		pixelFormat = GL_RGB;
 		pixelType = GL_UNSIGNED_BYTE;
 		break;
 	case ECF_A8R8G8B8:
@@ -4207,10 +4268,13 @@ bool COpenGLDriver::getColorFormatParameters(ECOLOR_FORMAT format, GLint& intern
 			pixelType = GL_UNSIGNED_INT_8_8_8_8_REV;
 		break;
 	case ECF_DXT1:
-		supported = true;
-		internalFormat = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
-		pixelFormat = GL_BGRA_EXT;
-		pixelType = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
+		if (queryOpenGLFeature(COpenGLExtensionHandler::IRR_EXT_texture_compression_s3tc))
+		{
+			supported = true;
+			internalFormat = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
+			pixelFormat = GL_BGRA_EXT;
+			pixelType = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
+		}
 		break;
 	case ECF_DXT2:
 	case ECF_DXT3:
@@ -4381,14 +4445,14 @@ bool COpenGLDriver::getColorFormatParameters(ECOLOR_FORMAT format, GLint& intern
 	return supported;
 }
 
-COpenGLDriver::E_OPENGL_FIXED_PIPELINE_STATE COpenGLDriver::getFixedPipelineState() const
+COpenGLDriver::E_OPENGL_ACTIVE_PIPELINE COpenGLDriver::getActivePipelineState() const
 {
-	return FixedPipelineState;
+	return ActivePipelineState;
 }
 
-void COpenGLDriver::setFixedPipelineState(COpenGLDriver::E_OPENGL_FIXED_PIPELINE_STATE state)
+void COpenGLDriver::setActivePipelineState(COpenGLDriver::E_OPENGL_ACTIVE_PIPELINE state)
 {
-	FixedPipelineState = state;
+	ActivePipelineState = state;
 }
 
 const SMaterial& COpenGLDriver::getCurrentMaterial() const
